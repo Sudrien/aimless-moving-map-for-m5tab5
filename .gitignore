@@ -9,3 +9,4 @@ test/tilesrctest
 test/builddatetest
 test/portalwebtest
 test/launcherkeytest
+test/suntest

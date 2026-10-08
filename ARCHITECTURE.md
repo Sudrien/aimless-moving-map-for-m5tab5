@@ -373,3 +373,43 @@ geometry and compares, and the take/commit rules; maptiletest that a
 resized scratch draws byte for byte what a native one does. aimless.c
 compiled -fsyntax-only as 0012's, not built. On the board: "overview
 12/x/y in N ms from card|cache|network: drawn" before the first tile.
+
+### 0015 -- day and night
+
+The original's automatic palette and backlight (original/README.md "Day
+and night"): the night palette while the sun is down where the receiver
+is, and the backlight in three steps, 24 % at night, 80 % by day, 55 % for
+half an hour either side of sunrise and sunset. The levels are the
+original's 60 and 140 of 255 as percent, judgements there; day is what
+this program already used. The palette itself is mapcore's style.c,
+which has had both since 0002.
+
+**The sun** is sun.c, the sunrise equation in C, where the original used
+buelowp/sunset (an Arduino library). Host-tested against astral's
+times for nine places and dates: within 2.3 minutes, the test holding it
+to three. Its wrap at UTC midnight and its circular distance to a
+crossing are the original's. One difference: the library gave the same
+time for rise and set with no crossing and the original had to call it
+polar day; the equation tells polar night apart, and that is night.
+
+**When.** Once a second, from the fix's position and RMC time, or the
+last position and the SNTP clock. A fix dropping to 'V' changes nothing:
+the original's palette flickered at walking pace until it stopped
+treating a lost fix as news about the sun. With no position or no time
+yet, nothing changes from the day palette.
+
+**The render task changes the palette**, because the style is global
+and it is what draws with it: between tiles, it re-initialises the
+style and calls mapview_restyle(), which queues every drawn tile again
+nearest first, drops the overview, and changes the background. An
+overview being drawn across a restyle is thrown away when it commits.
+Tiles with no data have no pixels and are left. So a switch costs a
+redraw of the grid -- the original's cost too, once a day each way.
+
+Not kept: the theme and brightness buttons (there are no buttons yet),
+and the idle dim, which needs the accelerometer the original read.
+
+Host: suntest (52 checks), and mapviewtest's restyle checks (9).
+Device: aimless.c compiled -fsyntax-only as before, not built. On the
+board: "sun: rise HH:MMZ set HH:MMZ at lat,lon; now day|night" when it
+changes, then "palette: night|day".

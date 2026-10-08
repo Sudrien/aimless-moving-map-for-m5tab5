@@ -293,6 +293,34 @@ int main(int argc, char **argv)
         CHECK(!mapview_coarse_take(&o, &id2, &px2), "the held overview drawn again");
         CHECK(mapview_coarse_ok(&o), "the held overview not used again");
         while (mapview_step(&o)) {}
+
+        /* A restyle (0015): drawn tiles queued again, no-data left, the
+         * overview dropped, the background changed. */
+        {
+            int drawn = 0, nodata = 0;
+            for (int i = 0; i < GRID_COUNT; i++) {
+                drawn += o.grid.slots[i].state == TILE_READY;
+                nodata += o.grid.slots[i].state == TILE_NODATA;
+            }
+            CHECK(drawn > 0 && mapview_coarse_ok(&o), "nothing to restyle");
+            mapview_restyle(&o, 0x1234);
+            CHECK(mapview_pending(&o) == drawn, "%d queued for %d drawn", mapview_pending(&o), drawn);
+            int still = 0;
+            for (int i = 0; i < GRID_COUNT; i++) still += o.grid.slots[i].state == TILE_NODATA;
+            CHECK(still == nodata, "no-data tiles changed");
+            CHECK(!mapview_coarse_ok(&o), "the overview kept its old colours");
+            mapview_compose(&o, fb, W, H, W);
+            CHECK(count(fb, 0x1234) == W * H, "the new background not used");
+            /* An overview being drawn across a restyle is thrown away. */
+            CHECK(mapview_coarse_take(&o, &id2, &px2), "take after a restyle");
+            mapview_restyle(&o, 0x1234);
+            mapview_coarse_commit(&o, id2, TILE_READY);
+            CHECK(!mapview_coarse_ok(&o), "an overview drawn in the old colours was kept");
+            CHECK(mapview_coarse_take(&o, &id2, &px2), "not asked for again");
+            mapview_coarse_commit(&o, id2, TILE_READY);
+            CHECK(mapview_coarse_ok(&o), "the redraw not kept");
+            while (mapview_step(&o)) {}
+        }
         free(cz[0]);
         free(cz[1]);
     }

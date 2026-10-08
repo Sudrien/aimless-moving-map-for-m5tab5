@@ -42,9 +42,13 @@ What works:
 - An overview a few zooms out fills in, softly, wherever a tile has not
   been drawn yet or has no data, so the screen is not blank while tiles
   arrive. It needs zoom 12 in an archive or from the network.
+- Day and night: the palette follows the sun where you are, and the
+  backlight dims at night, with a step between for half an hour either
+  side of sunrise and sunset. It needs a fix, or the network's clock and
+  an earlier fix.
 
-Not yet: labels, other zooms, the compass, waypoints. See
-`ARCHITECTURE.md`.
+Not yet: labels, the compass, waypoints, and the original's buttons --
+so no manual day/night or brightness override. See `ARCHITECTURE.md`.
 
 ## Networks
 

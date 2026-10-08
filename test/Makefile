@@ -20,6 +20,9 @@
 # launcherkeytest: main/launcherkey.c, M5Launcher's saved passwords
 # decrypted and its key found in a firmware image.
 #
+# suntest: main/sun.c, sunrise and sunset against astral's, and the
+# day/night question asked of them.
+#
 # -fno-sanitize=shift: raster.c converts to fixed point with
 # `v << RS_FRAC_BITS` on signed values that can be negative (geometry
 # outside the tile). That is undefined in C11 and does the arithmetic
@@ -40,7 +43,7 @@ LDFLAGS := -fsanitize=address,undefined -fno-sanitize=shift -lm
 CORE_SRCS := $(CORE)/src/inflate.c $(CORE)/src/mvt.c $(CORE)/src/pmtiles.c \
              $(CORE)/src/raster.c $(CORE)/src/style.c $(CORE)/src/tile_grid.c
 
-all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey
+all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun
 
 maptiletest: maptiletest.c ../main/maptile.c ../main/maptile.h $(CORE_SRCS) fixture.pmtiles
 	$(CC) $(CFLAGS) -o $@ maptiletest.c ../main/maptile.c $(CORE_SRCS) $(LDFLAGS)
@@ -84,7 +87,13 @@ launcherkeytest: launcherkeytest.c ../main/launcherkey.c ../main/launcherkey.h
 run-launcherkey: launcherkeytest
 	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./launcherkeytest
 
-clean:
-	rm -f maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest
+suntest: suntest.c ../main/sun.c ../main/sun.h
+	$(CC) $(CFLAGS) -o $@ suntest.c ../main/sun.c $(LDFLAGS)
 
-.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey clean
+run-sun: suntest
+	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./suntest
+
+clean:
+	rm -f maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest suntest
+
+.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun clean

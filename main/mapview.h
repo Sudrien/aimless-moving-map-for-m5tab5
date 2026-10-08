@@ -63,6 +63,7 @@ typedef struct {
     bool          cz_ok;            /* ...if this is set */
     tile_id_t     cz_want;          /* what the grid now needs */
     bool          cz_busy;          /* taken and not yet committed */
+    bool          cz_void;          /* restyled while busy: discard it */
     tile_id_t     cz_tried;         /* last that did not draw, and why */
     tile_state_t  cz_tried_state;   /* TILE_EMPTY: nothing tried */
     /* Overview pixel for each grid-tile pixel along a row or a column,
@@ -105,6 +106,14 @@ int  mapview_redo(mapview_t *v, bool nodata_too);
 
 /* Tiles still to render. */
 int  mapview_pending(const mapview_t *v);
+
+/*
+ * The palette changed (0015): every drawn tile and the overview are in
+ * the old colours, so all of them are drawn again, nearest first, and
+ * the background is `background` from now on. A tile with no data or a
+ * failure has no pixels to recolour and is left as it is.
+ */
+void mapview_restyle(mapview_t *v, uint16_t background);
 
 /* Turn the overview on: two COARSE_PX x COARSE_PX RGB565 buffers. */
 void mapview_set_coarse(mapview_t *v, uint16_t *a, uint16_t *b);

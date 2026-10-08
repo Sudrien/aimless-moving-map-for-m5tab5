@@ -33,6 +33,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
 
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
@@ -66,6 +67,7 @@
 #include "maptile.h"
 #include "mapview.h"
 #include "style.h"
+#include "sun.h"
 #include "netremote.h"
 #include "portal.h"
 #include "tilesrc.h"
@@ -113,6 +115,17 @@ static const char *TAG = "aimless";
 /* src: chosen. How often tiles that failed are tried again. */
 #define REDO_ERRORS_US  (30 * 1000000LL)
 
+/* The backlight by daylight (0015). Day is what it always was here; the
+ * other two are the original's levels on its 0-255 scale as percent.
+ * src: original/tab5_map.cpp BRIGHT_NIGHT 60 and BRIGHT_DUSK 140, both
+ * judgements there (original/PROVENANCE.md): 60/255 and 140/255. */
+#define BRIGHT_NIGHT_PCT (24)
+#define BRIGHT_DUSK_PCT  (55)
+/* Either side of sunrise and sunset, the dusk step.
+ * src: original/tab5_map.cpp DUSK_HALFWIDTH_MIN, civil twilight's rough
+ * length at mid latitudes. */
+#define DUSK_HALF_MIN    (30.0)
+
 /* A touch this long after the screen comes up asks for Wi-Fi setup.
  * src: original/tab5_map.cpp wantsSetup(), two seconds. */
 #define SETUP_WINDOW_US (2 * 1000000LL)
@@ -143,6 +156,11 @@ static tilesrc_t    s_src = { .local = &s_set };
 static SemaphoreHandle_t s_lock;
 static volatile bool s_dirty;
 static volatile bool s_online;
+/* The palette this loop wants, and the one the render task has drawn
+ * with. The style is global and the render task is what uses it, so the
+ * render task changes it, between tiles (0015). */
+static volatile bool s_want_dark;
+static bool s_dark;
 
 /*
  * Wi-Fi setup, as this loop moves through it. Read by the network's
@@ -363,6 +381,17 @@ static void render_task(void *arg)
     int64_t last_redo = esp_timer_get_time();
     uint32_t tiles = 0;
     for (;;) {
+        /* The palette, between tiles, so no tile is drawn half in each. */
+        if (s_want_dark != s_dark) {
+            s_dark = s_want_dark;
+            style_init(SUBTILE_PX, s_dark ? 1 : 0);
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            mapview_restyle(&s_view, style_background());
+            xSemaphoreGive(s_lock);
+            s_dirty = true;
+            ESP_LOGI(TAG, "palette: %s", s_dark ? "night" : "day");
+        }
+
         /* Outside the lock: this may be seconds of HTTP. */
         netremote_update(&s_src);
         const bool remote = s_src.remote != NULL;
@@ -472,6 +501,69 @@ static void net_start(void)
     /* Before usbhost_start(), like every class on the port. */
     if (ethernet_init() != ESP_OK)
         ESP_LOGW(TAG, "no USB Ethernet this boot");
+}
+
+/* ---- day and night ---- */
+
+/*
+ * The original's rule (original/README.md "Day and night"): the palette
+ * by whether the sun is up where the receiver is, and the backlight in
+ * three steps, dim at night, full by day, and between for half an hour
+ * either side of a crossing. Asked once a second.
+ *
+ * The time is the fix's, or the clock once SNTP has set it. The place is
+ * the fix's, or the last one: a fix that drops to 'V' under a bridge is
+ * not news about the sun, and the original's palette flickered night /
+ * day / night at walking pace until it stopped treating it as such.
+ * Without either, nothing changes.
+ */
+static void daylight(const gnss_fix_t *fix)
+{
+    static bool have_pos;
+    static double lat, lon;
+    static int last_pct = -1;
+    if (gnss_coarse(fix)) {
+        lat = fix->lat;
+        lon = fix->lon;
+        have_pos = true;
+    }
+    if (!have_pos) return;
+
+    int y, m, d;
+    double now;
+    if (!(fix->status == 'A' && sun_from_nmea(fix->date, fix->utc, &y, &m, &d, &now))) {
+        if (!wifi_ntp_synced()) return;
+        const time_t t = time(NULL);
+        struct tm tm;
+        gmtime_r(&t, &tm);
+        y = tm.tm_year + 1900;
+        m = tm.tm_mon + 1;
+        d = tm.tm_mday;
+        now = tm.tm_hour * 60.0 + tm.tm_min + tm.tm_sec / 60.0;
+    }
+
+    sun_day_t sd;
+    sun_day(lat, lon, y, m, d, &sd);
+    const bool dark = !sun_up(&sd, now);
+    if (dark != s_want_dark) {
+        if (sd.kind == SUN_CROSSES)
+            ESP_LOGI(TAG, "sun: rise %02d:%02dZ set %02d:%02dZ at %.3f,%.3f; now %s",
+                     (int)sd.rise_min / 60, (int)sd.rise_min % 60,
+                     (int)sd.set_min / 60, (int)sd.set_min % 60, lat, lon,
+                     dark ? "night" : "day");
+        else
+            ESP_LOGI(TAG, "sun: %s all day at %.3f,%.3f",
+                     sd.kind == SUN_ALWAYS_UP ? "up" : "down", lat, lon);
+        s_want_dark = dark;
+    }
+
+    const double near = sun_to_crossing(&sd, now);
+    const int pct = (near >= 0 && near < DUSK_HALF_MIN) ? BRIGHT_DUSK_PCT
+                  : dark ? BRIGHT_NIGHT_PCT : BACKLIGHT_PCT;
+    if (pct != last_pct) {
+        lcd_backlight_set(pct);
+        last_pct = pct;
+    }
 }
 
 /* ---- setup ---- */
@@ -741,6 +833,7 @@ void app_main(void)
 
         const int64_t now = esp_timer_get_time();
         if (s_dirty || now - last_draw >= 1000000) {
+            daylight(&fix);
             s_dirty = false;
             draw(&fix);
             last_draw = now;

@@ -107,6 +107,10 @@ bool mapview_coarse_take(mapview_t *v, tile_id_t *id, uint16_t **px)
 void mapview_coarse_commit(mapview_t *v, tile_id_t id, tile_state_t t)
 {
     v->cz_busy = false;
+    if (v->cz_void) {
+        v->cz_void = false;
+        return;
+    }
     if (t == TILE_READY) {
         /* Swapped in even if the grid has moved on since: it is a whole
          * picture of somewhere, and compose checks what it covers. */
@@ -195,6 +199,24 @@ int mapview_redo(mapview_t *v, bool nodata_too)
     if (v->cz_tried_state == TILE_ERROR || (nodata_too && v->cz_tried_state == TILE_NODATA))
         v->cz_tried_state = TILE_EMPTY;
     return n;
+}
+
+void mapview_restyle(mapview_t *v, uint16_t background)
+{
+    v->background = background;
+    if (v->grid.initialised) {
+        for (int i = 0; i < GRID_COUNT; i++) {
+            subtile_t *t = &v->grid.slots[i];
+            if (tile_drawable(t->state)) t->state = TILE_PENDING;
+        }
+        requeue(v);
+    }
+    /* The overview too, as the original's invalidate_coarse(). One being
+     * drawn now is in the old colours as well, so its commit is thrown
+     * away and the next take draws it again. */
+    v->cz_ok = false;
+    v->cz_tried_state = TILE_EMPTY;
+    if (v->cz_busy) v->cz_void = true;
 }
 
 bool mapview_take(mapview_t *v, render_job_t *job, uint16_t **px)
