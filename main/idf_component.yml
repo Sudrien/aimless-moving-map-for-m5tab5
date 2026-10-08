@@ -1,0 +1,22 @@
+dependencies:
+  idf:
+    version: ">=5.4.2"
+
+  # The board, the panel and the storage, from the libraries pulled out of
+  # defeatist-music-player-for-m5tab5. PINNED TO TAGS: a moving branch
+  # would change underneath a build that worked.
+  feckless_drivers:
+    git: https://github.com/Sudrien/feckless-drivers-for-m5tab5.git
+    version: "v0.3.0"
+  feckless_graphics_handler:
+    git: https://github.com/Sudrien/feckless-graphics-handler-for-m5tab5.git
+    version: "v0.1.0"
+  feckless_storage_handler:
+    git: https://github.com/Sudrien/feckless-storage-handler-for-m5tab5.git
+    version: "v0.1.0"
+
+  # Class drivers the two libraries require by name and do not fetch (the
+  # player vendors fixed copies of both). Mass storage is used here, for
+  # maps on a USB drive; USB audio only because feckless-drivers links it.
+  espressif/usb_host_msc: "^1.1.0"
+  espressif/usb_host_uac: "^1.5.0"

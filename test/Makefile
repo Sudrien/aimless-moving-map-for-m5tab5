@@ -6,6 +6,9 @@
 #
 # nmeatest: main/nmea.h, the GNSS module's sentences.
 #
+# mapviewtest: main/mapset.c and main/mapview.c -- the grid placed, filled,
+# moved and composed into the 1280 x 720 window -- on the fixture.
+#
 # -fno-sanitize=shift: raster.c converts to fixed point with
 # `v << RS_FRAC_BITS` on signed values that can be negative (geometry
 # outside the tile). That is undefined in C11 and does the arithmetic
@@ -26,7 +29,7 @@ LDFLAGS := -fsanitize=address,undefined -fno-sanitize=shift -lm
 CORE_SRCS := $(CORE)/src/inflate.c $(CORE)/src/mvt.c $(CORE)/src/pmtiles.c \
              $(CORE)/src/raster.c $(CORE)/src/style.c $(CORE)/src/tile_grid.c
 
-all: run-maptile run-nmea
+all: run-maptile run-nmea run-mapview
 
 maptiletest: maptiletest.c ../main/maptile.c ../main/maptile.h $(CORE_SRCS) fixture.pmtiles
 	$(CC) $(CFLAGS) -o $@ maptiletest.c ../main/maptile.c $(CORE_SRCS) $(LDFLAGS)
@@ -40,7 +43,13 @@ nmeatest: nmeatest.c ../main/nmea.h
 run-nmea: nmeatest
 	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./nmeatest
 
-clean:
-	rm -f maptiletest nmeatest
+mapviewtest: mapviewtest.c ../main/mapview.c ../main/mapview.h ../main/mapset.c ../main/mapset.h ../main/maptile.c $(CORE_SRCS) fixture.pmtiles
+	$(CC) $(CFLAGS) -o $@ mapviewtest.c ../main/mapview.c ../main/mapset.c ../main/maptile.c $(CORE_SRCS) $(LDFLAGS)
 
-.PHONY: all run-maptile run-nmea clean
+run-mapview: mapviewtest
+	cd $(CURDIR) && ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./mapviewtest
+
+clean:
+	rm -f maptiletest nmeatest mapviewtest
+
+.PHONY: all run-maptile run-nmea run-mapview clean
