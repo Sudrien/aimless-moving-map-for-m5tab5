@@ -14,3 +14,5 @@ test/uirowtest
 test/waypointstest
 # Made by cmake/exfat.cmake from the installed IDF (0018); not source.
 components/fatfs/
+test/worldtiletest
+test/worldtile.bin

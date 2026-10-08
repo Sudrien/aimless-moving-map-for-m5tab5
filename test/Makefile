@@ -28,6 +28,10 @@
 #
 # waypointstest: main/waypoints.c, saved points and the original's file.
 #
+# worldtiletest: tools/fetch_worldtile.py's walk of an archive against
+# mapcore's, on the fixture, and main/worldtile.c's drawing and placing.
+# Needs python3 as well as the compiler.
+#
 # -fno-sanitize=shift: raster.c converts to fixed point with
 # `v << RS_FRAC_BITS` on signed values that can be negative (geometry
 # outside the tile). That is undefined in C11 and does the arithmetic
@@ -48,7 +52,7 @@ LDFLAGS := -fsanitize=address,undefined -fno-sanitize=shift -lm
 CORE_SRCS := $(CORE)/src/inflate.c $(CORE)/src/mvt.c $(CORE)/src/pmtiles.c \
              $(CORE)/src/raster.c $(CORE)/src/style.c $(CORE)/src/tile_grid.c
 
-all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints
+all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile
 
 maptiletest: maptiletest.c ../main/maptile.c ../main/maptile.h $(CORE_SRCS) fixture.pmtiles
 	$(CC) $(CFLAGS) -o $@ maptiletest.c ../main/maptile.c $(CORE_SRCS) $(LDFLAGS)
@@ -110,7 +114,14 @@ waypointstest: waypointstest.c ../main/waypoints.c ../main/waypoints.h
 run-waypoints: waypointstest
 	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./waypointstest
 
-clean:
-	rm -f maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest suntest uirowtest waypointstest
+worldtiletest: worldtiletest.c ../main/worldtile.c ../main/worldtile.h ../main/maptile.c $(CORE_SRCS) fixture.pmtiles
+	$(CC) $(CFLAGS) -o $@ worldtiletest.c ../main/worldtile.c ../main/maptile.c $(CORE_SRCS) $(LDFLAGS)
 
-.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints clean
+run-worldtile: worldtiletest ../tools/fetch_worldtile.py
+	cd $(CURDIR) && python3 -I ../tools/fetch_worldtile.py worldtile.bin --file fixture.pmtiles --zxy 14/4823/6160
+	cd $(CURDIR) && ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./worldtiletest worldtile.bin
+
+clean:
+	rm -f maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest suntest uirowtest waypointstest worldtiletest worldtile.bin
+
+.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile clean

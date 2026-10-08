@@ -75,6 +75,7 @@
 #include "tilesrc.h"
 #include "uirow.h"
 #include "waypoints.h"
+#include "worldtile.h"
 #include "mercator.h"
 
 static const char *TAG = "aimless";
@@ -281,9 +282,47 @@ static void draw_status(const gnss_fix_t *fix, int pending)
                   gfx_w() - 20, gnss_coarse(fix) ? COL_STATUS_FG : COL_WAIT);
 }
 
+/* ---- the world, at boot (0020) ---- */
+
+/* Tile z0/0/0, fetched when the firmware was built (tools/
+ * fetch_worldtile.py, main/CMakeLists.txt) and embedded; empty when the
+ * build could not fetch it. */
+extern const uint8_t world_z0_start[] asm("_binary_world_z0_mvt_gz_start");
+extern const uint8_t world_z0_end[]   asm("_binary_world_z0_mvt_gz_end");
+
+/* The world drawn, in a grid buffer the grid has not started using;
+ * NULL once it has, or if there is no world. */
+static const uint16_t *s_world;
+
+static void world_draw(uint16_t *px)
+{
+    const size_t len = (size_t)(world_z0_end - world_z0_start);
+    if (len == 0) {
+        ESP_LOGI(TAG, "world: none embedded (the build could not fetch it)");
+        return;
+    }
+    const int64_t t0 = esp_timer_get_time();
+    const tile_state_t t = worldtile_draw(&s_render, world_z0_start, len, px);
+    if (t != TILE_READY) {
+        ESP_LOGW(TAG, "world: %u bytes embedded, but it would not draw", (unsigned)len);
+        return;
+    }
+    s_world = px;
+    ESP_LOGI(TAG, "world: %u bytes, %u inflated, drawn in %u ms", (unsigned)len,
+             (unsigned)s_render.last_inflated,
+             (unsigned)((esp_timer_get_time() - t0) / 1000));
+}
+
+/* A boot message: over the world when there is one, with a band behind
+ * the words so they read over land and sea alike; on black otherwise. */
 static void draw_message(const char *a, const char *b)
 {
-    gfx_fill_rect(0, 0, gfx_w(), gfx_h(), COL_STATUS_BG);
+    if (s_world) {
+        worldtile_compose(s_world, SUBTILE_PX, gfx_fb(), gfx_w(), gfx_h(), gfx_w());
+        gfx_fill_rect(0, gfx_h() / 2 - 60, gfx_w(), 110, COL_STATUS_BG);
+    } else {
+        gfx_fill_rect(0, 0, gfx_w(), gfx_h(), COL_STATUS_BG);
+    }
     gfx_draw_text(40, gfx_h() / 2 - 40, a, 3, gfx_w() - 80, COL_STATUS_FG);
     if (b) gfx_draw_text(40, gfx_h() / 2 + 10, b, 2, gfx_w() - 80, COL_WAIT);
     gfx_blit(0, gfx_h());
@@ -1352,6 +1391,22 @@ void app_main(void)
     else
         ESP_LOGW(TAG, "no touch this boot");
 
+    /* The render scratch and the grid's buffers, now rather than after
+     * the card and the network, so the world can be drawn into one of
+     * them while those come up (0020). */
+    style_init(SUBTILE_PX, 0);
+    if (maprender_init(&s_render, SUBTILE_PX, &MEM) != 0) {
+        draw_message("Out of memory", "render scratch");
+        return;
+    }
+    uint16_t *bufs[GRID_COUNT];
+    for (int i = 0; i < GRID_COUNT; i++) {
+        bufs[i] = mem_big((size_t)SUBTILE_PX * SUBTILE_PX * sizeof(uint16_t));
+        if (!bufs[i]) { draw_message("Out of memory", "tile buffers"); return; }
+    }
+    world_draw(bufs[0]);
+    draw_message("Aimless Moving Map", "looking for maps");
+
     /* The card, and a USB drive on the USB-A port, which feckless-storage
      * registers with the drivers' USB host before the port comes up. */
     ESP_ERROR_CHECK(usbhost_init(tab5io_exp2()));
@@ -1403,16 +1458,8 @@ void app_main(void)
         netremote_init(dir[0] ? dir : "/nowhere", &MEM);
     }
 
-    style_init(SUBTILE_PX, 0);
-    if (maprender_init(&s_render, SUBTILE_PX, &MEM) != 0) {
-        draw_message("Out of memory", "render scratch");
-        return;
-    }
-    uint16_t *bufs[GRID_COUNT];
-    for (int i = 0; i < GRID_COUNT; i++) {
-        bufs[i] = mem_big((size_t)SUBTILE_PX * SUBTILE_PX * sizeof(uint16_t));
-        if (!bufs[i]) { draw_message("Out of memory", "tile buffers"); return; }
-    }
+    /* bufs[0] holds the world until here; the grid takes it now. */
+    s_world = NULL;
     mapview_init(&s_view, src_draw, NULL, bufs, VIEW_ZOOM, style_background());
     /* The overview's two buffers, 512 KB each. Without them the map runs
      * as before, blank where a tile is missing. */

@@ -565,3 +565,45 @@ Device: netremote.c compiled -fsyntax-only for the P4 as before. On the
 board, with that card: "build 20260820 is 49 days old; looking again",
 "probing build 20261008: ok", "build 20260820 -> 20261008, old cache
 removed", "remote build 20261008 open".
+
+### 0020 -- the world at boot
+
+The original's boot screen had the world behind it from the first
+second, so it was a picture before the card, the archive and the
+network were up (original/worldmap.h). Its world was Natural Earth
+coastlines compiled in as coordinates, drawn by code of its own. This
+one is tile z0/0/0 of the Protomaps build itself, drawn by mapcore --
+the boot screen and the map are the same renderer in the same style.
+
+**Fetched at build time, not committed.** tools/fetch_worldtile.py
+(standard library only, so IDF's Python runs it) does what netremote.c
+does on the device: probes back from today for the newest daily under
+AIMLESS_TILE_BASE (or the pinned build), reads the PMTiles header,
+walks the directories to tile 0, and fetches its bytes with range
+requests. main/CMakeLists.txt runs it once per build directory and
+embeds the result (EMBED_FILES). The tile is OpenStreetMap-derived
+under the ODbL, and CLAUDE.md keeps that out of the repository; this
+puts it in the image and the build directory only. No network at that
+configure means an empty file, a firmware with no world, and a black
+boot screen as before -- never a failed build. `idf.py fullclean`
+fetches it again.
+
+**At boot** the render scratch and the grid's buffers are allocated
+before the card and the network rather than after (they depend on
+neither), the world is drawn into the first grid buffer, and the boot
+messages are drawn over it, centre-cropped to cover the screen as the
+original's was, with a band behind the words. The grid takes that buffer
+back when it starts.
+
+worldtile.c is free of ESP-IDF. The host test (worldtiletest) runs the
+script's archive walk on the fixture and checks it gets mapcore's bytes
+exactly, that worldtile_draw() is the renderer's output, and the cover
+placement pixel for pixel. The fixture has no z0, so its centre tile
+stands in.
+
+Not checked here: the real z0 tile. The sandbox this was written in
+cannot reach build.protomaps.com. The render scratch takes a tile up to
+192 KB compressed; the build warns if the fetched one is larger, and
+the firmware then logs that it would not draw. On the board:
+"world: N bytes, M inflated, drawn in T ms" before the card is mounted,
+and the configure prints "worldtile: 0/0/0, N bytes, from URL".

@@ -52,6 +52,10 @@ What works:
 - Saved points, and a bearing and distance back to one.
 
 - Cards and USB drives in FAT32 or exFAT, and archives of any size.
+- The whole world, tile z0/0/0, behind the boot screen, drawn by the
+  map's own renderer. The build fetches it from the same tile server the
+  map uses (it needs network once, at the first configure); without it
+  the boot screen is black.
 
 Not yet: labels, the area cache. See `ARCHITECTURE.md`.
 
