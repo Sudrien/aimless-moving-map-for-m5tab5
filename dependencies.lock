@@ -1,4 +1,21 @@
 dependencies:
+  esp_usbh_asix:
+    component_hash: 379ee7d5917b12397161d97957371607d5356bbbfb8c00055725e60e3176b5df
+    dependencies:
+    - name: idf
+      version: '>=5.4'
+    - name: espressif/iot_eth
+      public: true
+      version: ^1.1
+    source:
+      git: https://github.com/Sudrien/esp_usbh_asix.git
+      path: .
+      type: git
+    targets:
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    version: 5ceb50dc77df3437c8fb0d8f30ea5b3871f51521
   espressif/cmake_utilities:
     component_hash: 351350613ceafba240b761b4ea991e0f231ac7a9f59a9ee901f751bddc0bb18f
     dependencies:
@@ -9,6 +26,43 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 0.5.3
+  espressif/eppp_link:
+    component_hash: c1369b37f2b0b427b198ae14e07e7547d3da92b95fe4dc7f949e5de560b35f21
+    dependencies:
+    - name: espressif/esp_serial_slave_link
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^1.1.0
+    - name: idf
+      require: private
+      version: '>=5.2'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.1.6
+  espressif/esp_hosted:
+    component_hash: d72bce4d4a9fd6d4b610f3437735f58c70cfe40abfc969b53396dbb2e1d4c49b
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.5'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32
+    - esp32c2
+    - esp32s2
+    - esp32s3
+    - esp32c3
+    - esp32c5
+    - esp32c6
+    - esp32c61
+    - esp32h2
+    - esp32h4
+    - esp32h21
+    - esp32p4
+    version: 3.0.9
   espressif/esp_lcd_st7121:
     component_hash: 1d78b38f00dd25ff390c446c8d1b8e87cf7b7d95065d32f92cf5ad193ae70f58
     dependencies:
@@ -67,6 +121,103 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.0.2
+  espressif/esp_serial_slave_link:
+    component_hash: ac1776806de0a6e371c84e87898bb983e19ce62aa7f1e2e5c4a3b0234a575d2c
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.1.2
+  espressif/esp_wifi_remote:
+    component_hash: faa185898a843b9d7d0456e4094a3b5f1491a48ddd57ce0e5179e13ac6243f2c
+    dependencies:
+    - name: espressif/esp_hosted
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32h2, esp32p4]
+      version: '>=2.11'
+    - name: espressif/wifi_remote_over_eppp
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=0.1'
+    - name: idf
+      require: private
+      version: '>=5.3'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.6.5
+  espressif/iot_eth:
+    component_hash: 3be03ff933e27e17887becbed16305a561b35b66a5a4978ac51ae7f9f2ec70ea
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: '*'
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.0
+  espressif/iot_usbh_cdc:
+    component_hash: e924a79e9b7926b38bee52234d9f90101d8926f5e560dd5edf51c395546eac87
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: '*'
+    - name: espressif/usb
+      registry_url: https://components.espressif.com
+      require: public
+      rules:
+      - if: idf_version >=6.0
+      - if: target not in ["linux"]
+      version: ^1.4.0
+    - name: idf
+      require: private
+      version: '>=5.1'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    targets:
+    - esp32s2
+    - esp32s3
+    - esp32s31
+    - esp32p4
+    version: 3.1.0
+  espressif/iot_usbh_ecm:
+    component_hash: d5a216b80f1c457f2b55116b290bdb9553606de6c720f011c2264a05f6507ba5
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: '*'
+    - name: espressif/iot_eth
+      registry_url: https://components.espressif.com
+      require: public
+      version: '*'
+    - name: espressif/iot_usbh_cdc
+      registry_url: https://components.espressif.com
+      require: public
+      version: ^3.1
+    - name: idf
+      require: private
+      version: '>=5.2'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32s2
+    - esp32s3
+    - esp32s31
+    - esp32p4
+    version: 0.4.0
   espressif/usb_host_msc:
     component_hash: d8765c212bb4915d42560886fac3cc5059d61a0bfa14152b32ea9a5258e7a0c9
     dependencies:
@@ -119,6 +270,20 @@ dependencies:
     - esp32h4
     - linux
     version: 1.5.0
+  espressif/wifi_remote_over_eppp:
+    component_hash: 1fd6968af20f0b19e421f6b519b0a8caf81d689afc3783b564c28559e45f66ef
+    dependencies:
+    - name: espressif/eppp_link
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=0.1'
+    - name: idf
+      require: private
+      version: '>=5.3'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.3.3
   feckless_drivers:
     component_hash: a47366aec9908664357cddf4f69e18642f57f36a469d0d994b303e6ee5e67e6c
     dependencies:
@@ -145,6 +310,25 @@ dependencies:
       path: .
       type: git
     version: 390c89466719e0109d7067bbf57231f5381a4166
+  feckless_network_handler:
+    component_hash: e56c5f758c010e267b49f10d1f2137a3b23b9fff86cf2b54fd85644781a54e1f
+    dependencies:
+    - name: idf
+      version: '>=5.4.2'
+    - name: espressif/esp_wifi_remote
+      version: '*'
+    - name: espressif/esp_hosted
+      version: '>=3.0.2'
+    - git: https://github.com/Sudrien/esp_usbh_asix.git
+      name: esp_usbh_asix
+      version: v0.1.0
+    - name: espressif/iot_usbh_ecm
+      version: '*'
+    source:
+      git: https://github.com/Sudrien/feckless-network-handler-for-m5tab5.git
+      path: .
+      type: git
+    version: b625e326653e9f656f7e3a75b7cab06da607c2b4
   feckless_storage_handler:
     component_hash: 146a764c800770e7d79c2c16a6d38f29334fef302bf4a28a003fdc70a87beb9e
     dependencies:
@@ -158,14 +342,15 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.5.1
+    version: 5.5.5
 direct_dependencies:
 - espressif/usb_host_msc
 - espressif/usb_host_uac
 - feckless_drivers
 - feckless_graphics_handler
+- feckless_network_handler
 - feckless_storage_handler
 - idf
-manifest_hash: c8cd66fd2161e23a0f8df2b876cb5133246914abbbb26b9a350a33bd0f01a7d8
+manifest_hash: 606789cdd5330fc5a32c317a1c8d6eb1b501a90a4cd816b5885dd466a6d9c8d8
 target: esp32p4
 version: 2.0.0
