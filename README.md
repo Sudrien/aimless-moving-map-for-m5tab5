@@ -36,8 +36,9 @@ What works:
 - The position from the M135, followed as it moves, at zoom 14.
 - A marker, blue with a good 3D fix and grey with a rough one, and a
   status line with position, satellites, HDOP, speed and UTC.
-- Before the first fix, the map shows the first archive's centre, with
-  no marker.
+- Before the first fix, the map shows where the device last had a good
+  fix (kept on the card as the original's `lastfix.bin`), with no
+  marker; with no such file, the world stays up until the fix.
 - Wi-Fi setup from a phone, and M5Launcher's saved networks imported.
 - An overview a few zooms out fills in, softly, wherever a tile has not
   been drawn yet or has no data, so the screen is not blank while tiles

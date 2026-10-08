@@ -607,3 +607,33 @@ cannot reach build.protomaps.com. The render scratch takes a tile up to
 the firmware then logs that it would not draw. On the board:
 "world: N bytes, M inflated, drawn in T ms" before the card is mounted,
 and the configure prints "worldtile: 0/0/0, N bytes, from URL".
+
+### 0021 -- the world until there is a map, and the last known position
+
+From the board, after 0020: the world came up, then the map of
+somewhere else -- Boston, the centre of the card's local.pmtiles --
+then, at the fix, Michigan. That middle picture was milestone 1's
+choice (0005: "before a fix the map shows the first archive's header
+centre"), made when there was nothing better to show. There is now.
+
+**The world stays until the map has a picture of its own.** It is drawn
+into a buffer of its own rather than a grid buffer, and composed in
+place of the map until mapview_has_picture() -- the view placed, and a
+drawn tile or the overview over it -- then freed (3.2 MB of PSRAM back).
+
+**The view is placed by the last known position, or the fix.** The
+original saved a good fix to /lastfix.bin at most every ten minutes and
+drew the map from it at the next boot, with no marker
+(map_seed_position()). lastfix.c is that file byte for byte, checked
+against the original's struct on the host, so a card written by either
+program is read by the other. It also seeds the sun, so a boot after
+dark starts in the night palette, which was the original's other use of
+it. Without the file, nothing is placed and the world stays up until
+the fix. The archive's centre is no longer used.
+
+Host: lastfixtest (11 checks), mapviewtest 4 more. Device: aimless.c
+compiled -fsyntax-only for the P4, not built. On the board: "seeded at
+LAT,LON from the last known position" after the archives, then "world:
+the map has a picture; backdrop freed" when the first overview or tile
+for that place lands; a first boot, with no lastfix.bin, frees it only
+after the fix.

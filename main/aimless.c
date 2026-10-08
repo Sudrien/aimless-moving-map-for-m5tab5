@@ -76,6 +76,7 @@
 #include "uirow.h"
 #include "waypoints.h"
 #include "worldtile.h"
+#include "lastfix.h"
 #include "mercator.h"
 
 static const char *TAG = "aimless";
@@ -290,21 +291,30 @@ static void draw_status(const gnss_fix_t *fix, int pending)
 extern const uint8_t world_z0_start[] asm("_binary_world_z0_mvt_gz_start");
 extern const uint8_t world_z0_end[]   asm("_binary_world_z0_mvt_gz_end");
 
-/* The world drawn, in a grid buffer the grid has not started using;
- * NULL once it has, or if there is no world. */
-static const uint16_t *s_world;
+/* The world drawn, in a buffer of its own: on the screen from boot until
+ * the map has something of its own to show where it is placed -- the
+ * last known position's tiles, or the fix's -- then freed (0021). NULL
+ * once freed, or if there is no world. */
+static uint16_t *s_world;
 
-static void world_draw(uint16_t *px)
+static void world_draw(void)
 {
     const size_t len = (size_t)(world_z0_end - world_z0_start);
     if (len == 0) {
         ESP_LOGI(TAG, "world: none embedded (the build could not fetch it)");
         return;
     }
+    uint16_t *px = heap_caps_malloc((size_t)SUBTILE_PX * SUBTILE_PX * sizeof(uint16_t),
+                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!px) {
+        ESP_LOGW(TAG, "world: no PSRAM for it");
+        return;
+    }
     const int64_t t0 = esp_timer_get_time();
     const tile_state_t t = worldtile_draw(&s_render, world_z0_start, len, px);
     if (t != TILE_READY) {
         ESP_LOGW(TAG, "world: %u bytes embedded, but it would not draw", (unsigned)len);
+        heap_caps_free(px);
         return;
     }
     s_world = px;
@@ -463,6 +473,39 @@ static int64_t utc_now(const gnss_fix_t *fix)
         return (era * 146097 + doe - 719468) * 86400 + (int64_t)(min * 60.0);
     }
     return wifi_ntp_synced() ? (int64_t)time(NULL) : 0;
+}
+
+/* ---- the last known position (0021) ---- */
+
+/* src: original/tab5_map.cpp LASTFIX_PATH, at the card's root. */
+#define LASTFIX_PATH    STORAGE_SD_MOUNT "/lastfix.bin"
+/* src: original/tab5_map.cpp: written on a good fix at most every ten
+ * minutes -- a boot position does not need to be fresher, and the card
+ * does not need the writes. */
+#define LASTFIX_EVERY_US (600 * 1000000LL)
+
+static bool lastfix_read(double *lat, double *lon)
+{
+    FILE *f = fopen(LASTFIX_PATH, "rb");
+    if (!f) return false;
+    uint8_t b[LASTFIX_BYTES];
+    const size_t n = fread(b, 1, sizeof(b), f);
+    fclose(f);
+    return lastfix_decode(b, n, lat, lon);
+}
+
+static void lastfix_keep(const gnss_fix_t *fix)
+{
+    static int64_t last;
+    const int64_t now = esp_timer_get_time();
+    if (!gnss_fine(fix) || (last && now - last < LASTFIX_EVERY_US)) return;
+    last = now;
+    uint8_t b[LASTFIX_BYTES];
+    lastfix_encode(fix->lat, fix->lon, utc_now(fix), b);
+    FILE *f = fopen(LASTFIX_PATH, "wb");
+    if (!f) return;
+    const bool ok = fwrite(b, 1, sizeof(b), f) == sizeof(b);
+    if (fclose(f) != 0 || !ok) ESP_LOGW(TAG, "last position: write failed");
 }
 
 /* ---- the button row and the settings panel (0016) ---- */
@@ -762,7 +805,14 @@ static void draw(const gnss_fix_t *fix)
 {
     if (s_screen_off) return;
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    mapview_compose(&s_view, gfx_fb(), gfx_w(), gfx_h(), gfx_w());
+    /* The world until the map has a picture of its own (0021). */
+    if (s_world && mapview_has_picture(&s_view)) {
+        heap_caps_free(s_world);
+        s_world = NULL;
+        ESP_LOGI(TAG, "world: the map has a picture; backdrop freed");
+    }
+    if (s_world) worldtile_compose(s_world, SUBTILE_PX, gfx_fb(), gfx_w(), gfx_h(), gfx_w());
+    else mapview_compose(&s_view, gfx_fb(), gfx_w(), gfx_h(), gfx_w());
     const int pending = mapview_pending(&s_view);
     const double vx = s_view.fx, vy = s_view.fy;
     xSemaphoreGive(s_lock);
@@ -973,20 +1023,25 @@ static void apply_light(bool sun_dark, int sun_pct)
     backlight(pct);
 }
 
+/* Where the sun is asked about: the fix, or the last known position
+ * until there is one (0021), so a boot in the dark starts dark. */
+static bool   s_sun_have;
+static double s_sun_lat, s_sun_lon;
+
 static void daylight(const gnss_fix_t *fix)
 {
-    static bool have_pos, have_sun;
-    static double lat, lon;
+    static bool have_sun;
     static bool sun_dark;
     static int sun_pct = BACKLIGHT_PCT;
     if (gnss_coarse(fix)) {
-        lat = fix->lat;
-        lon = fix->lon;
-        have_pos = true;
+        s_sun_lat = fix->lat;
+        s_sun_lon = fix->lon;
+        s_sun_have = true;
     }
+    const double lat = s_sun_lat, lon = s_sun_lon;
     /* Without a position or a time the sun's answer is the last one, or
      * day; the overrides still apply. */
-    if (!have_pos) { apply_light(sun_dark, sun_pct); return; }
+    if (!s_sun_have) { apply_light(sun_dark, sun_pct); return; }
 
     int y, m, d;
     double now;
@@ -1404,7 +1459,7 @@ void app_main(void)
         bufs[i] = mem_big((size_t)SUBTILE_PX * SUBTILE_PX * sizeof(uint16_t));
         if (!bufs[i]) { draw_message("Out of memory", "tile buffers"); return; }
     }
-    world_draw(bufs[0]);
+    world_draw();
     draw_message("Aimless Moving Map", "looking for maps");
 
     /* The card, and a USB drive on the USB-A port, which feckless-storage
@@ -1458,8 +1513,6 @@ void app_main(void)
         netremote_init(dir[0] ? dir : "/nowhere", &MEM);
     }
 
-    /* bufs[0] holds the world until here; the grid takes it now. */
-    s_world = NULL;
     mapview_init(&s_view, src_draw, NULL, bufs, VIEW_ZOOM, style_background());
     /* The overview's two buffers, 512 KB each. Without them the map runs
      * as before, blank where a tile is missing. */
@@ -1476,11 +1529,22 @@ void app_main(void)
 
     s_lock = xSemaphoreCreateMutex();
 
-    /* Before a fix, the first archive's centre, so there is a map to look
-     * at; without a marker, since it is not where anyone is. With no
-     * archive there is nowhere to look until the fix. */
-    double lat, lon;
-    if (mapset_centre(&s_set, &lat, &lon)) mapview_centre(&s_view, lat, lon);
+    /* Before a fix, the last known position, so the map that comes up is
+     * the one around where the device was (original map_seed_position());
+     * without a marker, since it is not where anyone is now. Without one,
+     * nowhere: the world stays up until the fix. 0021: this was the
+     * first archive's centre, which put a stranger's city on the screen
+     * between the world and the fix. */
+    {
+        double lat, lon;
+        if (lastfix_read(&lat, &lon)) {
+            mapview_centre(&s_view, lat, lon);
+            s_sun_lat = lat;
+            s_sun_lon = lon;
+            s_sun_have = true;
+            ESP_LOGI(TAG, "seeded at %.4f,%.4f from the last known position", lat, lon);
+        }
+    }
 
     if (xTaskCreatePinnedToCore(render_task, "render", RENDER_STACK, NULL,
                                 RENDER_PRIO, NULL, RENDER_CORE) != pdPASS) {
@@ -1515,6 +1579,7 @@ void app_main(void)
 
         setup_step();
         ui_touch(&fix);
+        lastfix_keep(&fix);
 
         const int64_t now = esp_timer_get_time();
         if (s_dirty || now - last_draw >= 1000000) {

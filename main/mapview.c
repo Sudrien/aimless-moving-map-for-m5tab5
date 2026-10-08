@@ -129,6 +129,15 @@ bool mapview_coarse_ok(const mapview_t *v)
     return v->cz_ok && same_id(v->cz_have, v->cz_want);
 }
 
+bool mapview_has_picture(const mapview_t *v)
+{
+    if (!v->placed || !v->grid.initialised) return false;
+    if (mapview_coarse_ok(v)) return true;
+    for (int i = 0; i < GRID_COUNT; i++)
+        if (tile_drawable(v->grid.slots[i].state)) return true;
+    return false;
+}
+
 /* Where grid tile `id` sits in the overview held, in overview pixels;
  * false if it does not. */
 static bool coarse_cell(const mapview_t *v, tile_id_t id, int *ox, int *oy)

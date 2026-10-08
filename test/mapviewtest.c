@@ -103,6 +103,7 @@ int main(int argc, char **argv)
     CHECK(steps == GRID_COUNT, "%d steps", steps);
     for (int i = 0; i < GRID_COUNT; i++)
         CHECK(v.grid.slots[i].state == TILE_READY, "slot %d state %d", i, v.grid.slots[i].state);
+    CHECK(mapview_has_picture(&v), "drawn tiles, no overview, and no picture");
     mapview_compose(&v, fb, W, H, W);
     /* The rasteriser's edge coverage leaves a few tile-edge pixels at
      * the background colour; maptiletest allows 1 %, this 0.5 %. */
@@ -210,7 +211,9 @@ int main(int argc, char **argv)
         uint16_t *px;
         CHECK(!mapview_coarse_take(&o, &id, &px), "an overview before a position");
 
+        CHECK(!mapview_has_picture(&o), "a picture before a position");
         mapview_centre(&o, lat - 0.002, lon + 0.003);
+        CHECK(!mapview_has_picture(&o), "a picture before anything was drawn");
         CHECK(mapview_coarse_take(&o, &id, &px), "take");
         const int32_t midx = o.grid.origin.x + GRID_N / 2, midy = o.grid.origin.y + GRID_N / 2;
         CHECK(id.z == Z - COARSE_STEP && id.x == midx >> COARSE_STEP && id.y == midy >> COARSE_STEP,
@@ -229,6 +232,7 @@ int main(int argc, char **argv)
                 px[y * COARSE_PX + x] = (uint16_t)((y * 7919 + x * 31) | 1);
         mapview_coarse_commit(&o, id, TILE_READY);
         CHECK(mapview_coarse_ok(&o), "not ok after its commit");
+        CHECK(mapview_has_picture(&o), "the overview is a picture");
         CHECK(!mapview_coarse_take(&o, &id2, &px2), "taken again when held");
 
         /* Every window pixel of a slot the overview covers is the overview

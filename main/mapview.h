@@ -136,6 +136,11 @@ void mapview_coarse_commit(mapview_t *v, tile_id_t id, tile_state_t t);
 /* Whether the overview held now covers the grid. */
 bool mapview_coarse_ok(const mapview_t *v);
 
+/* Whether the view has anything of the map to show yet: placed, and a
+ * drawn tile or the overview over the grid (0021). Until then the world
+ * stays on the screen. */
+bool mapview_has_picture(const mapview_t *v);
+
 /*
  * Copy the w x h window centred on the position into `fb` (row stride
  * `stride` pixels). Tiles not drawn yet, or with no data, come from the

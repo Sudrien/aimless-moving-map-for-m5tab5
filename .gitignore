@@ -16,3 +16,4 @@ test/waypointstest
 components/fatfs/
 test/worldtiletest
 test/worldtile.bin
+test/lastfixtest
