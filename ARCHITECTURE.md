@@ -676,3 +676,18 @@ written. Hiding is advisory, as storage.h says: if it fails the file
 still works and is only visible.
 
 The original program will not find any of these under its own names.
+
+### 0024 -- sentences a minute
+
+The status line before a fix, and the 10 s log line, gave the number of
+NMEA sentences since boot. A count that only grows says nothing at a
+glance. Both now give a rate: sentences a minute over the last ten
+seconds, about 840 from this receiver at its 1 Hz rate (140 in each 10 s
+of the board logs). 0 means the receiver has stopped talking, which is
+the thing the number was there to show; "listening" or "?" before the
+first ten seconds are up.
+
+And from the same log: a tile with no data was logged with byte sizes
+left in the render scratch by whatever it drew last -- at boot, the
+world tile's 66795 -> 93230. Sizes are now logged only for a tile that
+drew.

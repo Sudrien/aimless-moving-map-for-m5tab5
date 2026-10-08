@@ -262,6 +262,26 @@ static tile_state_t src_draw(void *ctx, tile_id_t id, uint16_t *px, int split)
 
 /* ---- drawing ---- */
 
+/* NMEA sentences a minute from the receiver, over the last ten seconds;
+ * -1 until there have been ten (0024). A count since boot only ever
+ * grows and says nothing at a glance; a rate says the receiver is
+ * talking, and how much -- about 800 a minute is normal here, 0 is a
+ * receiver that is not. */
+static int s_sent_per_min = -1;
+
+static void sentence_rate(void)
+{
+    static int64_t at;
+    static uint32_t was;
+    const int64_t now = esp_timer_get_time();
+    const uint32_t n = gnss_sentences();
+    if (!at) { at = now; was = n; return; }
+    if (now - at < 10000000) return;
+    s_sent_per_min = (int)((uint64_t)(n - was) * 60000000ULL / (uint64_t)(now - at));
+    at = now;
+    was = n;
+}
+
 static void draw_status(const gnss_fix_t *fix, int pending)
 {
     /* With a target, where it is goes first: the rest of the line is
@@ -276,8 +296,11 @@ static void draw_status(const gnss_fix_t *fix, int pending)
                  VIEW_ZOOM, fix->sats, fix->hdop, fix->speed_kmh, fix->utc,
                  s_online ? "online" : "offline", pending ? "   drawing" : "");
     } else {
-        snprintf(line, sizeof(line), "waiting for a fix   %u sentences   %d sats in view   %s%s",
-                 (unsigned)gnss_sentences(),
+        char rate[24];
+        if (s_sent_per_min < 0) snprintf(rate, sizeof(rate), "listening");
+        else snprintf(rate, sizeof(rate), "%d sentences/min", s_sent_per_min);
+        snprintf(line, sizeof(line), "waiting for a fix   %s   %d sats in view   %s%s",
+                 rate,
                  fix->cons[0].visible + fix->cons[1].visible + fix->cons[2].visible +
                  fix->cons[3].visible, s_online ? "online" : "offline",
                  pending ? "   drawing" : "");
@@ -972,11 +995,19 @@ static void render_task(void *arg)
         xSemaphoreGive(s_lock);
         s_dirty = true;
 
-        ESP_LOGI(TAG, "tile %u/%u/%u in %u ms from %s: %s (%u -> %u bytes)",
-                 job.id.z, (unsigned)job.id.x, (unsigned)job.id.y,
-                 (unsigned)((esp_timer_get_time() - t0) / 1000), from_name(from),
-                 t == TILE_READY ? "drawn" : t == TILE_NODATA ? "no data" : "FAILED",
-                 (unsigned)s_render.last_bytes, (unsigned)s_render.last_inflated);
+        /* Sizes only for a tile that drew: otherwise they are whatever
+         * the scratch last held (0024: a "no data" tile was logged with
+         * the world tile's sizes). */
+        if (t == TILE_READY)
+            ESP_LOGI(TAG, "tile %u/%u/%u in %u ms from %s: drawn (%u -> %u bytes)",
+                     job.id.z, (unsigned)job.id.x, (unsigned)job.id.y,
+                     (unsigned)((esp_timer_get_time() - t0) / 1000), from_name(from),
+                     (unsigned)s_render.last_bytes, (unsigned)s_render.last_inflated);
+        else
+            ESP_LOGI(TAG, "tile %u/%u/%u in %u ms from %s: %s",
+                     job.id.z, (unsigned)job.id.x, (unsigned)job.id.y,
+                     (unsigned)((esp_timer_get_time() - t0) / 1000), from_name(from),
+                     t == TILE_NODATA ? "no data" : "FAILED");
         if ((++tiles % 16) == 0)
             ESP_LOGI(TAG, "render task stack: %u bytes never used",
                      (unsigned)uxTaskGetStackHighWaterMark(NULL));
@@ -1628,6 +1659,7 @@ void app_main(void)
         /* Today's date, for finding a daily build without SNTP. */
         if (fix.status == 'A') netremote_set_today(bd_from_ddmmyy(fix.date));
 
+        sentence_rate();
         setup_step();
         ui_touch(&fix);
         lastfix_keep(&fix);
@@ -1644,9 +1676,12 @@ void app_main(void)
             netremote_stats(&ns);
             char route[64];
             net_route_describe(route, sizeof(route));
-            ESP_LOGI(TAG, "fix %c mode %d, %d sats, HDOP %.1f, %u sentences, PPS %u",
-                     fix.status, fix.mode, fix.sats, fix.hdop,
-                     (unsigned)gnss_sentences(), (unsigned)gnss_pps_count());
+            char rate[24];
+            if (s_sent_per_min < 0) snprintf(rate, sizeof(rate), "? sentences/min");
+            else snprintf(rate, sizeof(rate), "%d sentences/min", s_sent_per_min);
+            ESP_LOGI(TAG, "fix %c mode %d, %d sats, HDOP %.1f, %s, PPS %u",
+                     fix.status, fix.mode, fix.sats, fix.hdop, rate,
+                     (unsigned)gnss_pps_count());
             ESP_LOGI(TAG, "net %s, build %s%s, %u requests (%u connections, %u failed), "
                           "%u KB, last %u ms; tiles %u cache, %u card, %u network, %u errors",
                      route, ns.build[0] ? ns.build : "none", ns.open ? " open" : "",
