@@ -1,0 +1,47 @@
+# Build output.
+build/
+sdkconfig
+sdkconfig.old
+
+# Resolved by the ESP-IDF component manager during project(). Committing the
+# lock file would pin dependencies, which is sometimes wanted - but this tree
+# already pins the versions that matter in main/idf_component.yml, and the
+# manager rewrites managed_components/ whenever it re-resolves, so anything
+# committed there is overwritten without warning.
+managed_components/
+dependencies.lock
+
+# NOT ignored any more: components/sunset/sunset is a git submodule now, and
+# ignoring a submodule path is a way to lose track of it - git still records
+# the gitlink, so the two disagree about whether the directory is the repo's
+# business.
+#
+# The CMakeLists clone is still there and still useful, because it fills the
+# directory for anyone who clones without --recursive and never runs
+# `git submodule update --init`. It only runs when src/sunset.cpp is missing,
+# so an initialised submodule is left alone. What it cannot do is check out the
+# commit the submodule pins - it clones the tip - so if the pinned commit ever
+# matters, initialise the submodule rather than relying on the fallback.
+
+# Derived by CMakeLists.txt from $IDF_PATH at configure time, and re-derived
+# whenever the IDF version changes - see the MAP_FATFS_EXFAT block.
+#
+# Deliberately ignored, unlike the advice in the example this was ported from.
+# That advice assumes a script somebody has to remember to run, where an
+# uncommitted copy means a fresh clone silently builds FAT-only. Here the copy
+# is made automatically, so committing it would only pin a fork of one of IDF's
+# components to whichever IDF was installed the day it was made. The patch that
+# produces it lives in tools/patch_ffconf.py, which is committed.
+components/fatfs/
+
+# Bosch's BMI270 and BMM150 reference drivers, fetched by CMakeLists.txt on
+# first configure (or by tools/fetch_bosch_drivers.sh by hand).
+#
+# Ignored for the same reason as components/fatfs/: a byte-exact copy of a
+# pinned upstream, under a different licence to this repo (BSD-3-Clause), that
+# is re-derived automatically. Committing it would vendor a fork of somebody
+# else's driver and pin it to whatever was on the server that day.
+#
+# compass.cpp guards on __has_include("bmi270.h"), so a tree without these
+# builds and runs - the compass dial falls back to GNSS course over ground.
+components/bosch_sensortec/
