@@ -1,0 +1,5 @@
+test/maptiletest
+build/
+managed_components/
+sdkconfig
+sdkconfig.old
