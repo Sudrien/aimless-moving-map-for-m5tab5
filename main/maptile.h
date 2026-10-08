@@ -73,11 +73,21 @@ typedef struct {
     uint16_t  *val_name_len;
     /* For the log, from the last call. */
     uint32_t   last_bytes, last_inflated;
+    int        max_size;        /* what the scratch was made for */
 } maprender_t;
 
 /* Scratch for tiles `size` pixels on an edge. 0 on success. */
 int  maprender_init(maprender_t *r, int size, const maptile_alloc_t *mem);
 void maprender_free(maprender_t *r);
+
+/*
+ * Draw at another size from now on, up to the size the scratch was made
+ * for: only the coverage row depends on it. For the overview (0014),
+ * which is drawn COARSE_PX square with the grid's scratch, as the
+ * original's render_tile() took a size per call. 0 on success, -1 if
+ * `size` is larger or not positive.
+ */
+int  maprender_resize(maprender_t *r, int size);
 
 /*
  * Draw tile `id` -- whose data is `split` zooms coarser, as the original's

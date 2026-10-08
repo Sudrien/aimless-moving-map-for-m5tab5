@@ -383,8 +383,33 @@ static void render_task(void *arg)
             last_redo = now;
         }
         had_remote = remote;
-        const bool took = mapview_take(&s_view, &job, &px);
+        /* The overview first: until it lands the screen has nothing at
+         * all, and once it has, every tile still to come shows soft
+         * rather than blank. The original put the first one behind the
+         * grid because its boot screen already had a picture; this has
+         * none (0014). */
+        tile_id_t cz_id;
+        uint16_t *cz_px = NULL;
+        const bool cz_took = mapview_coarse_take(&s_view, &cz_id, &cz_px);
+        const bool took = !cz_took && mapview_take(&s_view, &job, &px);
         xSemaphoreGive(s_lock);
+
+        if (cz_took) {
+            const int64_t t0 = esp_timer_get_time();
+            tilesrc_from_t from;
+            maprender_resize(&s_render, COARSE_PX);
+            const tile_state_t t = tilesrc_draw(&s_src, &s_render, cz_id, cz_px, 0, &from);
+            maprender_resize(&s_render, SUBTILE_PX);
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            mapview_coarse_commit(&s_view, cz_id, t);
+            xSemaphoreGive(s_lock);
+            s_dirty = true;
+            ESP_LOGI(TAG, "overview %u/%u/%u in %u ms from %s: %s",
+                     cz_id.z, (unsigned)cz_id.x, (unsigned)cz_id.y,
+                     (unsigned)((esp_timer_get_time() - t0) / 1000), from_name(from),
+                     t == TILE_READY ? "drawn" : t == TILE_NODATA ? "no data" : "FAILED");
+            continue;
+        }
 
         if (!took) { vTaskDelay(pdMS_TO_TICKS(100)); continue; }
 
@@ -667,6 +692,14 @@ void app_main(void)
         if (!bufs[i]) { draw_message("Out of memory", "tile buffers"); return; }
     }
     mapview_init(&s_view, src_draw, NULL, bufs, VIEW_ZOOM, style_background());
+    /* The overview's two buffers, 512 KB each. Without them the map runs
+     * as before, blank where a tile is missing. */
+    {
+        uint16_t *cz_a = mem_big((size_t)COARSE_PX * COARSE_PX * sizeof(uint16_t));
+        uint16_t *cz_b = mem_big((size_t)COARSE_PX * COARSE_PX * sizeof(uint16_t));
+        if (cz_a && cz_b) mapview_set_coarse(&s_view, cz_a, cz_b);
+        else ESP_LOGW(TAG, "no overview: out of PSRAM");
+    }
     ESP_LOGI(TAG, "%d tiles of %d px in PSRAM; %u KB PSRAM, %u KB internal left",
              GRID_COUNT, SUBTILE_PX,
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),

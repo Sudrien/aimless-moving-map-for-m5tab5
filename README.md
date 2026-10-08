@@ -39,6 +39,9 @@ What works:
 - Before the first fix, the map shows the first archive's centre, with
   no marker.
 - Wi-Fi setup from a phone, and M5Launcher's saved networks imported.
+- An overview a few zooms out fills in, softly, wherever a tile has not
+  been drawn yet or has no data, so the screen is not blank while tiles
+  arrive. It needs zoom 12 in an archive or from the network.
 
 Not yet: labels, other zooms, the compass, waypoints. See
 `ARCHITECTURE.md`.

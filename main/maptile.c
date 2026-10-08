@@ -116,6 +116,7 @@ int maprender_init(maprender_t *r, int size, const maptile_alloc_t *mem)
     memset(r, 0, sizeof(*r));
     r->mem = *mem;
     r->size = size;
+    r->max_size = size;
     r->tile_cap = TILE_CAP;
     r->mvt_cap  = MVT_CAP;
     r->tile  = get_big(mem, TILE_CAP);
@@ -137,6 +138,13 @@ int maprender_init(maprender_t *r, int size, const maptile_alloc_t *mem)
     }
     /* rs_clear() leaves cov zeroed and the fillers expect it so. */
     memset(r->cov, 0, (size_t)size * sizeof(uint16_t));
+    return 0;
+}
+
+int maprender_resize(maprender_t *r, int size)
+{
+    if (size <= 0 || size > r->max_size) return -1;
+    r->size = size;
     return 0;
 }
 

@@ -332,3 +332,44 @@ hardware: everything above.
 0011 as first sent carried a copy of the 0010 patch file under `out/`,
 left in the work tree when 0011 was committed. That copy went in with
 it. This removes it; nothing else changes.
+
+### 0014 -- the overview
+
+Milestone 3's zoom work starts below the grid rather than above it.
+The original reads the map at z14 only (its Z_LEVEL_CLOSE and
+Z_LEVEL_WIDE are both Z_FLOOR), and the other zoom it draws is its
+coarse overview: one z12 tile, 512 px, covering the 4 x 4 grid tiles
+around the grid's middle, scaled up into any slot that has nothing of
+its own. Before this, a tile not yet drawn, or with no data, was the
+background colour; now it is the overview, soft, until the real tile
+lands, and for good where none will.
+
+**At compose time, not in the slot.** The original copied the overview
+into a slot's buffer. Here the render task draws straight into a
+PENDING slot's buffer (0009), so a copy there would be overwritten
+half-way; mapview_compose() samples the overview instead, for the parts
+of the window over a slot that is not drawable. Nearest-neighbour, a
+source row resampled once and repeated, as the original's coarse_fill()
+measured. Two 512 KB buffers, so the one composed is never the one being
+drawn; with no PSRAM for them the map runs as it did.
+
+**First in the queue.** The original queued the first overview behind
+the grid because its boot screen already had a picture. This one has
+none, so the overview goes first: one tile, then a whole soft screen.
+
+**Retries** are the grid's: an overview that failed is asked for again
+on the 30 s redo, and one with no data when the network appears
+(mapview_redo()). It is drawn with the grid's render scratch at
+COARSE_PX (maprender_resize(); only the coverage row depends on the
+size, which maptiletest checks is exact) and through the same source
+chain, so it comes from the cache, the card or the network.
+
+COARSE_STEP 2 and COARSE_PX 512 are the original's. An archive with
+z14 only has no z12, so on such a card the overview comes from the
+network or not at all.
+
+Checked on the host: mapviewtest works out every window pixel from the
+geometry and compares, and the take/commit rules; maptiletest that a
+resized scratch draws byte for byte what a native one does. aimless.c
+compiled -fsyntax-only as 0012's, not built. On the board: "overview
+12/x/y in N ms from card|cache|network: drawn" before the first tile.

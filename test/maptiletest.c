@@ -150,6 +150,30 @@ int main(int argc, char **argv)
         fclose(o);
     }
 
+    /* A scratch made for a larger size, resized down, draws exactly what
+     * one made for this size does (0014: the overview uses the grid's). */
+    {
+        maprender_t big2;
+        CHECK(maprender_init(&big2, 2 * PX, &MEM) == 0, "big scratch");
+        CHECK(maprender_resize(&big2, 2 * PX + 1) == -1, "resized past its scratch");
+        CHECK(maprender_resize(&big2, 0) == -1, "resized to nothing");
+        CHECK(maprender_resize(&big2, PX) == 0, "resize");
+        static uint16_t a1[PX * PX], a2[PX * PX];
+        const tile_id_t id = { Z, CX, CY };
+        CHECK(maprender_tile(&r, &a, id, a1, 0) == TILE_READY, "draw at PX");
+        CHECK(maprender_tile(&big2, &a, id, a2, 0) == TILE_READY, "draw resized");
+        CHECK(memcmp(a1, a2, sizeof(a1)) == 0, "a resized scratch drew differently");
+        /* And back up again. */
+        static uint16_t b2[4 * PX * PX];
+        CHECK(maprender_resize(&big2, 2 * PX) == 0, "resize back");
+        const tile_state_t sb = maprender_tile(&big2, &a, id, b2, 0);
+        int nb = 0;
+        for (int i = 0; i < 4 * PX * PX; i++) nb += b2[i] == STYLES[S_EARTH].fill;   /* the dark style, set above */
+        CHECK(sb == TILE_READY && nb > 4 * PX * PX / 10,
+              "draw at the full size after a resize: state %d, earth %d px", sb, nb);
+        maprender_free(&big2);
+    }
+
     maprender_free(&r);
     maparchive_close(&a);
     fclose(f);

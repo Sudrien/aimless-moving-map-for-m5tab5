@@ -49,6 +49,100 @@ static void requeue(mapview_t *v)
     }
 }
 
+/* ---- the overview ---- */
+
+/* Overview pixels per grid tile along an edge: 128 at 512 and step 2. */
+#define CZ_SUB  (COARSE_PX >> COARSE_STEP)
+
+/* The overview tile around the grid's middle, as the original's
+ * ensure_coarse(): the centre, not the corner, so it covers the whole
+ * grid rather than drifting off one edge. x wraps round the world and y
+ * is held to it. */
+static void coarse_aim(mapview_t *v)
+{
+    if (!v->coarse_px[0] || !v->grid.initialised) return;
+    int cz = (int)v->z - COARSE_STEP;
+    if (cz < 0) cz = 0;
+    const int step = (int)v->z - cz;
+    const int64_t n = (int64_t)1 << v->z;
+    int64_t mx = ((int64_t)v->grid.origin.x + GRID_N / 2) % n;
+    if (mx < 0) mx += n;
+    int64_t my = (int64_t)v->grid.origin.y + GRID_N / 2;
+    if (my < 0) my = 0;
+    if (my >= n) my = n - 1;
+    v->cz_want.z = (uint8_t)cz;
+    v->cz_want.x = (int32_t)(mx >> step);
+    v->cz_want.y = (int32_t)(my >> step);
+}
+
+static bool same_id(tile_id_t a, tile_id_t b)
+{
+    return a.z == b.z && a.x == b.x && a.y == b.y;
+}
+
+void mapview_set_coarse(mapview_t *v, uint16_t *a, uint16_t *b)
+{
+    v->coarse_px[0] = a;
+    v->coarse_px[1] = b;
+    v->cz_front = 0;
+    v->cz_ok = false;
+    v->cz_busy = false;
+    v->cz_tried_state = TILE_EMPTY;
+    for (int i = 0; i < SUBTILE_PX; i++)
+        v->cz_map[i] = (uint16_t)((int64_t)i * CZ_SUB / SUBTILE_PX);
+    coarse_aim(v);
+}
+
+bool mapview_coarse_take(mapview_t *v, tile_id_t *id, uint16_t **px)
+{
+    if (!v->coarse_px[0] || !v->grid.initialised || v->cz_busy) return false;
+    if (v->cz_ok && same_id(v->cz_have, v->cz_want)) return false;
+    if (v->cz_tried_state != TILE_EMPTY && same_id(v->cz_tried, v->cz_want)) return false;
+    *id = v->cz_want;
+    *px = v->coarse_px[1 - v->cz_front];
+    v->cz_busy = true;
+    return true;
+}
+
+void mapview_coarse_commit(mapview_t *v, tile_id_t id, tile_state_t t)
+{
+    v->cz_busy = false;
+    if (t == TILE_READY) {
+        /* Swapped in even if the grid has moved on since: it is a whole
+         * picture of somewhere, and compose checks what it covers. */
+        v->cz_front = 1 - v->cz_front;
+        v->cz_have = id;
+        v->cz_ok = true;
+        v->cz_tried_state = TILE_EMPTY;
+    } else {
+        v->cz_tried = id;
+        v->cz_tried_state = t;
+    }
+}
+
+bool mapview_coarse_ok(const mapview_t *v)
+{
+    return v->cz_ok && same_id(v->cz_have, v->cz_want);
+}
+
+/* Where grid tile `id` sits in the overview held, in overview pixels;
+ * false if it does not. */
+static bool coarse_cell(const mapview_t *v, tile_id_t id, int *ox, int *oy)
+{
+    if (!v->cz_ok || id.z <= v->cz_have.z) return false;
+    const int step = id.z - v->cz_have.z;
+    if (step != COARSE_STEP) return false;
+    const int64_t cx = (int64_t)id.x - ((int64_t)v->cz_have.x << step);
+    const int64_t cy = (int64_t)id.y - ((int64_t)v->cz_have.y << step);
+    const int span = 1 << step;
+    if (cx < 0 || cy < 0 || cx >= span || cy >= span) return false;
+    *ox = (int)cx * CZ_SUB;
+    *oy = (int)cy * CZ_SUB;
+    return true;
+}
+
+/* ---- following ---- */
+
 void mapview_centre(mapview_t *v, double lat, double lon)
 {
     const merc_pt_t p = merc_from_ll(lat, lon, v->z);
@@ -60,6 +154,7 @@ void mapview_centre(mapview_t *v, double lat, double lon)
         const tile_id_t origin = { v->z, grid_origin_for(p.x), grid_origin_for(p.y) };
         grid_init(&v->grid, v->bufs, origin);
         requeue(v);
+        coarse_aim(v);
         return;
     }
     /* A jump of more than one tile is a new grid, not a shift. */
@@ -71,12 +166,14 @@ void mapview_centre(mapview_t *v, double lat, double lon)
         render_job_t unused[GRID_COUNT];
         grid_set_zoom(&v->grid, origin, unused, GRID_COUNT);
         requeue(v);
+        coarse_aim(v);
         return;
     }
     if (dx || dy) {
         render_job_t unused[GRID_COUNT];
         grid_shift(&v->grid, dx, dy, unused, GRID_COUNT);
         requeue(v);
+        coarse_aim(v);
     }
 }
 
@@ -94,6 +191,9 @@ int mapview_redo(mapview_t *v, bool nodata_too)
         }
     }
     if (n) requeue(v);
+    /* The overview, by the same rule. */
+    if (v->cz_tried_state == TILE_ERROR || (nodata_too && v->cz_tried_state == TILE_NODATA))
+        v->cz_tried_state = TILE_EMPTY;
     return n;
 }
 
@@ -121,6 +221,30 @@ bool mapview_step(mapview_t *v)
     return true;
 }
 
+/*
+ * One slot's clipped rectangle from the overview, nearest-neighbour. A
+ * source row is resampled once and repeated with memcpy, as the
+ * original's coarse_fill() measured: ten destination rows in eleven are
+ * the row above again.
+ */
+static void compose_coarse(const mapview_t *v, uint16_t *fb, int stride, int ox, int oy,
+                           int sx0, int sy0, int x0, int y0, int x1, int y1)
+{
+    const uint16_t *src = v->coarse_px[v->cz_front];
+    int prev = -1;
+    for (int y = y0; y < y1; y++) {
+        uint16_t *dst = &fb[(size_t)y * stride + x0];
+        const int srow = oy + v->cz_map[y - sy0];
+        if (srow == prev) {
+            memcpy(dst, dst - stride, (size_t)(x1 - x0) * sizeof(uint16_t));
+            continue;
+        }
+        const uint16_t *row = src + (size_t)srow * COARSE_PX + ox;
+        for (int x = x0; x < x1; x++) dst[x - x0] = row[v->cz_map[x - sx0]];
+        prev = srow;
+    }
+}
+
 void mapview_compose(const mapview_t *v, uint16_t *fb, int w, int h, int stride)
 {
     for (int y = 0; y < h; y++)
@@ -136,7 +260,6 @@ void mapview_compose(const mapview_t *v, uint16_t *fb, int w, int h, int stride)
     for (int r = 0; r < GRID_N; r++) {
         for (int c = 0; c < GRID_N; c++) {
             const subtile_t *s = &v->grid.slots[r * GRID_N + c];
-            if (!tile_drawable(s->state)) continue;
             /* This slot's rectangle in window coordinates, clipped. */
             const int sx0 = c * SUBTILE_PX - left, sy0 = r * SUBTILE_PX - top;
             const int x0 = sx0 < 0 ? 0 : sx0, y0 = sy0 < 0 ? 0 : sy0;
@@ -144,6 +267,12 @@ void mapview_compose(const mapview_t *v, uint16_t *fb, int w, int h, int stride)
             if (x1 > w) x1 = w;
             if (y1 > h) y1 = h;
             if (x0 >= x1 || y0 >= y1) continue;
+            if (!tile_drawable(s->state)) {
+                int ox, oy;
+                if (coarse_cell(v, s->id, &ox, &oy))
+                    compose_coarse(v, fb, stride, ox, oy, sx0, sy0, x0, y0, x1, y1);
+                continue;
+            }
             for (int y = y0; y < y1; y++)
                 memcpy(&fb[(size_t)y * stride + x0],
                        &s->pixels[(size_t)(y - sy0) * SUBTILE_PX + (x0 - sx0)],
