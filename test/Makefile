@@ -17,6 +17,9 @@
 # portalwebtest: main/portalweb.c and main/dnsreply.c, the setup portal's
 # form and DNS -- the code that reads bytes from anyone in radio range.
 #
+# launcherkeytest: main/launcherkey.c, M5Launcher's saved passwords
+# decrypted and its key found in a firmware image.
+#
 # -fno-sanitize=shift: raster.c converts to fixed point with
 # `v << RS_FRAC_BITS` on signed values that can be negative (geometry
 # outside the tile). That is undefined in C11 and does the arithmetic
@@ -37,7 +40,7 @@ LDFLAGS := -fsanitize=address,undefined -fno-sanitize=shift -lm
 CORE_SRCS := $(CORE)/src/inflate.c $(CORE)/src/mvt.c $(CORE)/src/pmtiles.c \
              $(CORE)/src/raster.c $(CORE)/src/style.c $(CORE)/src/tile_grid.c
 
-all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb
+all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey
 
 maptiletest: maptiletest.c ../main/maptile.c ../main/maptile.h $(CORE_SRCS) fixture.pmtiles
 	$(CC) $(CFLAGS) -o $@ maptiletest.c ../main/maptile.c $(CORE_SRCS) $(LDFLAGS)
@@ -75,7 +78,13 @@ portalwebtest: portalwebtest.c ../main/portalweb.c ../main/portalweb.h ../main/d
 run-portalweb: portalwebtest
 	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./portalwebtest
 
-clean:
-	rm -f maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest
+launcherkeytest: launcherkeytest.c ../main/launcherkey.c ../main/launcherkey.h
+	$(CC) $(CFLAGS) -o $@ launcherkeytest.c ../main/launcherkey.c $(LDFLAGS)
 
-.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb clean
+run-launcherkey: launcherkeytest
+	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./launcherkeytest
+
+clean:
+	rm -f maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest
+
+.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey clean

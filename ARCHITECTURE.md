@@ -240,3 +240,26 @@ about every name). Both are copied from defeatist-music-player at
 74535ca with their test, test/portalwebtest.c. The one change is the
 access point's name, "Aimless-XXXX", so the two programs are told apart
 in a phone's list; the test checks for it.
+
+### 0011 -- launcherkey
+
+The other way a network gets here: from M5Launcher, when this program
+is installed under it. Launcher keeps its own list in an encrypted
+`config.conf` on the card; defeatist has a one-tap import of it, and
+this is that import's crypto core, split out so it runs on a host.
+
+**The key is found, not stored.** Launcher's passwords are AES-128-CBC
+under a key fixed at Launcher's build, which is in its firmware and not
+its source. Every printable run in Launcher's app partition is tried,
+and the one that decrypts config.conf's entries to valid padding over
+printable text is it. launcherkey.h has the details.
+
+**Three departures from defeatist's launcher_import.c**, each with a
+check in test/launcherkeytest.c: the scan keeps its run across reads,
+where defeatist's cut it at every 4 KB and so missed a key that
+straddled one; the base64 decoder no longer overflows an int; and a PSK
+saved in Launcher as 64 hex digits, 80 bytes encrypted, now fits.
+
+The test's ciphertexts come from OpenSSL under a made-up key, with the
+command in the test, so the decryption is checked against something
+other than itself.

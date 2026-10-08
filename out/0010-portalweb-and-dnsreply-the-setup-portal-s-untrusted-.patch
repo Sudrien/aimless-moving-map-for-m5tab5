@@ -1,0 +1,1066 @@
+From 535eb60e68926a615d3cb102341d81b842cfdfdc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 8 Oct 2026 18:37:57 +0000
+Subject: [PATCH] portalweb and dnsreply -- the setup portal's untrusted input,
+ host-tested
+
+The first piece of milestone 3's setup portal: the form decoding,
+HTML escaping, credential checks and join plan (portalweb.c), and the
+captive DNS reply (dnsreply.c), copied from
+defeatist-music-player-for-m5tab5 at 74535ca with their host test.
+The access point is named "Aimless-XXXX" instead of "Defeatist-XXXX";
+nothing else in them changed.
+
+Nothing calls them yet. make -C test runs portalwebtest under ASan and
+UBSan with this repository's -Wextra -Werror: 108 checks, 0 failures.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RDpeMtxD7bXof5yC8e4Ujg
+---
+ .gitignore           |   1 +
+ ARCHITECTURE.md      |  17 +++
+ main/dnsreply.c      |  68 ++++++++++
+ main/dnsreply.h      |  62 +++++++++
+ main/portalweb.c     | 314 +++++++++++++++++++++++++++++++++++++++++++
+ main/portalweb.h     | 171 +++++++++++++++++++++++
+ test/Makefile        |  15 ++-
+ test/portalwebtest.c | 311 ++++++++++++++++++++++++++++++++++++++++++
+ 8 files changed, 956 insertions(+), 3 deletions(-)
+ create mode 100644 main/dnsreply.c
+ create mode 100644 main/dnsreply.h
+ create mode 100644 main/portalweb.c
+ create mode 100644 main/portalweb.h
+ create mode 100644 test/portalwebtest.c
+
+diff --git a/.gitignore b/.gitignore
+index e6b779b..86bb8d8 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -7,3 +7,4 @@ test/nmeatest
+ test/mapviewtest
+ test/tilesrctest
+ test/builddatetest
++test/portalwebtest
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+index cb579e3..d9f51c2 100644
+--- a/ARCHITECTURE.md
++++ b/ARCHITECTURE.md
+@@ -223,3 +223,20 @@ render task logs its unused stack every 16 tiles.
+ `builddate.h`'s bd_name() needed the same room for GCC's
+ format-truncation check as 0006: the IDF build is the first to compile
+ it.
++
++### 0010 -- portalweb and dnsreply
++
++Milestone 3 starts with the setup portal, so that a network can be added
++here and not only in defeatist. This is its untrusted-input half,
++host-tested before anything uses it.
++
++**From defeatist, not from original/.** The original's portal.cpp is
++Arduino WebServer and DNSServer, so it does not port. Defeatist's is
++the same design rewritten on plain ESP-IDF for this board and this C6,
++with everything that parses a byte from a phone pulled out to run under
++the sanitizers: portalweb.c (the form's fields, HTML escaping, which
++secret to try first) and dnsreply.c (the lie every captive portal tells
++about every name). Both are copied from defeatist-music-player at
++74535ca with their test, test/portalwebtest.c. The one change is the
++access point's name, "Aimless-XXXX", so the two programs are told apart
++in a phone's list; the test checks for it.
+diff --git a/main/dnsreply.c b/main/dnsreply.c
+new file mode 100644
+index 0000000..302ea4e
+--- /dev/null
++++ b/main/dnsreply.c
+@@ -0,0 +1,68 @@
++/*
++ * dnsreply.c -- see dnsreply.h.
++ *
++ * defeatist-music-player-for-m5tab5's main/dnsreply.c at 74535ca, unchanged.
++ *
++ * SPDX-License-Identifier: MIT
++ */
++#include "dnsreply.h"
++
++#include <string.h>
++
++#define HDR         (12)
++#define TYPE_A      (1)
++#define CLASS_IN    (1)
++#define NAME_MAX_B  (255)
++
++static uint16_t rd16(const uint8_t *p) { return (uint16_t)((p[0] << 8) | p[1]); }
++static void wr16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v; }
++
++size_t dnsreply_build(const uint8_t *q, size_t n, const uint8_t ip[4],
++                      uint8_t *out, size_t out_len)
++{
++    if (!q || !ip || !out || n < HDR || n > DNSREPLY_MAX) return 0;
++
++    const uint8_t flags_hi = q[2];
++    if (flags_hi & 0x80) return 0;                  /* a response    */
++    if ((flags_hi >> 3) & 0x0F) return 0;           /* not QUERY     */
++    if (rd16(q + 4) != 1) return 0;                 /* one question  */
++
++    /* The question name: labels, no pointers, within the packet and
++     * within the protocol's own length limit. */
++    size_t p = HDR, name_len = 0;
++    for (;;) {
++        if (p >= n) return 0;
++        const uint8_t len = q[p];
++        if (len == 0) { p++; name_len++; break; }
++        if (len & 0xC0) return 0;                   /* pointer/reserved */
++        name_len += (size_t)len + 1;
++        if (name_len > NAME_MAX_B) return 0;
++        p += (size_t)len + 1;
++    }
++    if (p + 4 > n) return 0;                        /* QTYPE + QCLASS */
++    const uint16_t qtype  = rd16(q + p);
++    const uint16_t qclass = rd16(q + p + 2);
++    p += 4;
++
++    const int answer = (qtype == TYPE_A && qclass == CLASS_IN);
++    const size_t need = p + (answer ? 16u : 0u);
++    if (need > out_len) return 0;
++
++    memcpy(out, q, p);                              /* header + question */
++    out[2] = (uint8_t)(0x84 | (flags_hi & 0x01));   /* QR, AA, copy RD */
++    out[3] = 0x00;                                  /* RA 0, NOERROR   */
++    wr16(out + 6, answer ? 1 : 0);                  /* ANCOUNT */
++    wr16(out + 8, 0);                               /* NSCOUNT */
++    wr16(out + 10, 0);                              /* ARCOUNT */
++
++    if (answer) {
++        uint8_t *a = out + p;
++        wr16(a, 0xC00C);                            /* name: the question */
++        wr16(a + 2, TYPE_A);
++        wr16(a + 4, CLASS_IN);
++        a[6] = 0; a[7] = 0; a[8] = 0; a[9] = 1;     /* TTL 1 s */
++        wr16(a + 10, 4);
++        memcpy(a + 12, ip, 4);
++    }
++    return need;
++}
+diff --git a/main/dnsreply.h b/main/dnsreply.h
+new file mode 100644
+index 0000000..e9892b2
+--- /dev/null
++++ b/main/dnsreply.h
+@@ -0,0 +1,62 @@
++/*
++ * dnsreply.h -- the whole of the portal's DNS server, minus the socket.
++ *
++ * A captive portal works by lying about every name. A phone that joins
++ * the setup network asks for its connectivity-check host, gets this
++ * device's address back, requests a page it did not expect, and opens
++ * the sign-in sheet -- which is the form. So the server answers every A
++ * query with one address and never looks anything up.
++ *
++ * Pure bytes in, bytes out, so the parsing -- which is the part that
++ * reads untrusted input from anyone in radio range -- runs under ASan on
++ * a host. portal.c owns the socket and the task.
++ *
++ * WHAT IT ANSWERS
++ *
++ *   A / IN      one record, the portal's address, TTL 1 s. Short so a
++ *               phone that leaves the portal does not keep resolving the
++ *               world to a device it is no longer joined to.
++ *   anything    NOERROR with no records. AAAA in particular: a phone
++ *   else        that gets an IPv6 answer tries it first and waits.
++ *
++ * WHAT IT IGNORES, BY RETURNING 0
++ *
++ *   responses, non-QUERY opcodes, anything but exactly one question,
++ *   truncated packets, compression pointers inside the question (a
++ *   client has no reason to send one and a loop is the classic bug),
++ *   and names past the 255-byte limit. Ignoring is right for all of
++ *   them: nothing a phone sends to find a sign-in page looks like any
++ *   of these, and a malformed packet does not earn a reply.
++ *
++ * Additional records (EDNS OPT) are dropped from the reply rather than
++ * echoed, which is legal and means the reply never grows past the
++ * question plus sixteen bytes.
++ *
++ * defeatist-music-player-for-m5tab5's main/dnsreply.h at 74535ca, unchanged.
++ *
++ * SPDX-License-Identifier: MIT
++ */
++#pragma once
++
++#include <stddef.h>
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* Classic DNS over UDP. A query larger than this is not one a phone
++ * sends while looking for a portal. */
++#define DNSREPLY_MAX    (512)
++
++/*
++ * Build the reply to `q` (`n` bytes) in `out`. `ip` is the address to
++ * give, four bytes in network order. Returns the reply's length, or 0
++ * when the packet should get no reply at all.
++ */
++size_t dnsreply_build(const uint8_t *q, size_t n, const uint8_t ip[4],
++                      uint8_t *out, size_t out_len);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/main/portalweb.c b/main/portalweb.c
+new file mode 100644
+index 0000000..52bf5ae
+--- /dev/null
++++ b/main/portalweb.c
+@@ -0,0 +1,314 @@
++/*
++ * portalweb.c -- see portalweb.h.
++ *
++ * defeatist-music-player-for-m5tab5's main/portalweb.c at 74535ca,
++ * unchanged but for the AP's name: "Aimless-XXXX".
++ *
++ * SPDX-License-Identifier: MIT
++ */
++#include "portalweb.h"
++
++#include <stdio.h>
++#include <string.h>
++
++static int hexval(char c)
++{
++    if (c >= '0' && c <= '9') return c - '0';
++    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
++    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
++    return -1;
++}
++
++bool portalweb_field(const char *body, size_t len, const char *key,
++                     char *out, size_t out_size)
++{
++    if (!out || !out_size) return false;
++    out[0] = '\0';
++    if (!body || !key) return false;
++
++    const size_t klen = strlen(key);
++    size_t i = 0;
++    while (i < len) {
++        /* One pair: up to the next '&' or the end. */
++        size_t end = i;
++        while (end < len && body[end] != '&') end++;
++
++        if (end - i > klen && memcmp(body + i, key, klen) == 0 &&
++            body[i + klen] == '=') {
++            size_t o = 0;
++            for (size_t k = i + klen + 1; k < end; k++) {
++                char c = body[k];
++                if (c == '+') {
++                    c = ' ';
++                } else if (c == '%') {
++                    /* Two hex digits, both inside this pair. */
++                    if (k + 2 >= end) { out[0] = '\0'; return false; }
++                    const int hi = hexval(body[k + 1]);
++                    const int lo = hexval(body[k + 2]);
++                    if (hi < 0 || lo < 0) { out[0] = '\0'; return false; }
++                    c = (char)((hi << 4) | lo);
++                    k += 2;
++                    if (c == '\0') { out[0] = '\0'; return false; }
++                }
++                if (o + 1 >= out_size) { out[0] = '\0'; return false; }
++                out[o++] = c;
++            }
++            out[o] = '\0';
++            return true;
++        }
++        /* A key with an empty value ("ssid=") is end - i == klen + 1,
++         * which the test above takes; a bare key with no '=' is not a
++         * field. */
++        i = end + 1;
++    }
++    return false;
++}
++
++bool portalweb_escape(const char *in, char *out, size_t out_size)
++{
++    if (!out || !out_size) return false;
++    out[0] = '\0';
++    if (!in) return true;
++
++    size_t o = 0;
++    for (const unsigned char *p = (const unsigned char *)in; *p; p++) {
++        const char *rep = NULL;
++        char one[2] = { (char)*p, '\0' };
++        switch (*p) {
++        case '&':  rep = "&amp;";  break;
++        case '<':  rep = "&lt;";   break;
++        case '>':  rep = "&gt;";   break;
++        case '"':  rep = "&quot;"; break;
++        case '\'': rep = "&#39;";  break;
++        default:
++            rep = (*p < 0x20 || *p == 0x7F) ? "\xEF\xBF\xBD" : one;
++        }
++        const size_t rl = strlen(rep);
++        if (o + rl + 1 > out_size) { out[0] = '\0'; return false; }
++        memcpy(out + o, rep, rl);
++        o += rl;
++    }
++    out[o] = '\0';
++    return true;
++}
++
++void portalweb_ap_name(const uint8_t mac[6], char *out, size_t out_size)
++{
++    uint32_t h = 2166136261u;
++    for (int i = 0; i < 6; i++) {
++        h ^= mac ? mac[i] : 0;
++        h *= 16777619u;
++    }
++    const uint16_t tag = (uint16_t)((h >> 16) ^ (h & 0xFFFF));
++    static const char X[] = "0123456789ABCDEF";
++    const char name[] = {
++        'A','i','m','l','e','s','s','-',
++        X[(tag >> 12) & 0xF], X[(tag >> 8) & 0xF],
++        X[(tag >> 4) & 0xF],  X[tag & 0xF], '\0'
++    };
++    if (!out || !out_size) return;
++    if (out_size < sizeof(name)) { out[0] = '\0'; return; }
++    memcpy(out, name, sizeof(name));
++}
++
++portalweb_check_t portalweb_check(const char *ssid, const char *secret)
++{
++    const size_t sl = ssid ? strlen(ssid) : 0;
++    if (sl == 0 || sl > 32) return PORTALWEB_BAD_SSID;
++
++    const size_t pl = secret ? strlen(secret) : 0;
++    if (pl == 0) return PORTALWEB_NO_SECRET;
++
++    /* Before the length: UTF-8 changes the byte count, and a curly
++     * quote in a 10-character password is not a length problem. */
++    for (size_t i = 0; i < pl; i++) {
++        if ((unsigned char)secret[i] >= 0x80) return PORTALWEB_NON_ASCII;
++    }
++
++    if (pl == 64) {
++        for (size_t i = 0; i < pl; i++) {
++            if (hexval(secret[i]) < 0) return PORTALWEB_BAD_SECRET;
++        }
++        return PORTALWEB_OK_PSK;
++    }
++    if (pl < 8 || pl > 63) return PORTALWEB_BAD_SECRET;
++    for (size_t i = 0; i < pl; i++) {
++        const unsigned char c = (unsigned char)secret[i];
++        if (c < 0x20 || c > 0x7E) return PORTALWEB_BAD_SECRET;
++    }
++    return PORTALWEB_OK_PASSPHRASE;
++}
++
++void portalweb_hex(const uint8_t *in, size_t n, char *out)
++{
++    static const char x[] = "0123456789abcdef";
++    for (size_t i = 0; i < n; i++) {
++        out[2 * i]     = x[in[i] >> 4];
++        out[2 * i + 1] = x[in[i] & 0xF];
++    }
++    out[2 * n] = '\0';
++}
++
++/*
++ * Decode one UTF-8 sequence at `p`. Returns its length in bytes (1..4)
++ * and the code point in *cp, or 1 with *cp = 0xFFFFFFFF for a byte that
++ * does not start a valid sequence -- which is reported as such, since a
++ * phone sending invalid UTF-8 is itself the finding.
++ */
++static size_t utf8_one(const unsigned char *p, uint32_t *cp)
++{
++    const unsigned char c = p[0];
++    if (c < 0x80) { *cp = c; return 1; }
++    size_t len;
++    uint32_t v, min;
++    if ((c & 0xE0) == 0xC0)      { len = 2; v = c & 0x1F; min = 0x80; }
++    else if ((c & 0xF0) == 0xE0) { len = 3; v = c & 0x0F; min = 0x800; }
++    else if ((c & 0xF8) == 0xF0) { len = 4; v = c & 0x07; min = 0x10000; }
++    else { *cp = 0xFFFFFFFFu; return 1; }
++    for (size_t i = 1; i < len; i++) {
++        if ((p[i] & 0xC0) != 0x80) { *cp = 0xFFFFFFFFu; return 1; }
++        v = (v << 6) | (p[i] & 0x3F);
++    }
++    if (v < min || v > 0x10FFFF || (v >= 0xD800 && v <= 0xDFFF)) {
++        *cp = 0xFFFFFFFFu;
++        return 1;
++    }
++    *cp = v;
++    return len;
++}
++
++static const struct { uint32_t cp; const char *name; const char *ascii; } LOOKALIKE[] = {
++    { 0x2018, "curly opening quote",     "'"   },
++    { 0x2019, "curly apostrophe",        "'"   },
++    { 0x201C, "curly opening double quote", "\"" },
++    { 0x201D, "curly closing double quote", "\"" },
++    { 0x2013, "en dash",                 "-"   },
++    { 0x2014, "em dash",                 "-"   },
++    { 0x2026, "ellipsis",                "..." },
++    { 0x00A0, "no-break space",          "a plain space" },
++    { 0x00B4, "acute accent",            "'"   },
++    { 0x02BC, "modifier apostrophe",     "'"   },
++};
++
++static int lookalike(uint32_t cp)
++{
++    for (size_t i = 0; i < sizeof(LOOKALIKE) / sizeof(LOOKALIKE[0]); i++) {
++        if (LOOKALIKE[i].cp == cp) return (int)i;
++    }
++    return -1;
++}
++
++/* Append to a bounded buffer; on overflow, end in "..." and stop. */
++static bool put(char *out, size_t size, size_t *o, const char *s)
++{
++    if (!size) return false;
++    const size_t n = strlen(s);
++    if (*o + n + 1 <= size) {
++        memcpy(out + *o, s, n + 1);
++        *o += n;
++        return true;
++    }
++    if (size >= 4) {
++        const size_t at = (*o + 4 <= size) ? *o : size - 4;
++        memcpy(out + at, "...", 4);
++        *o = at + 3;
++    } else {
++        out[size - 1] = '\0';
++    }
++    return false;
++}
++
++void portalweb_describe(const char *secret, char *out, size_t out_size)
++{
++    if (!out || !out_size) return;
++    out[0] = '\0';
++    if (!secret) return;
++
++    const size_t bytes = strlen(secret);
++    size_t chars = 0;
++    for (size_t i = 0; i < bytes; chars++) {
++        uint32_t cp;
++        i += utf8_one((const unsigned char *)secret + i, &cp);
++    }
++
++    size_t o = 0;
++    char buf[48];
++    snprintf(buf, sizeof(buf), "%zu byte%s, %zu char%s", bytes,
++             bytes == 1 ? "" : "s", chars, chars == 1 ? "" : "s");
++    if (!put(out, out_size, &o, buf)) return;
++    if (bytes && secret[0] == ' ' && !put(out, out_size, &o, ", leading space")) return;
++    if (bytes && secret[bytes - 1] == ' ' && !put(out, out_size, &o, ", trailing space")) return;
++    if (bytes && secret[0] >= 'A' && secret[0] <= 'Z' &&
++        !put(out, out_size, &o, ", first letter capital")) return;
++
++    for (size_t i = 0; i < bytes;) {
++        uint32_t cp;
++        const size_t n = utf8_one((const unsigned char *)secret + i, &cp);
++        if (cp == 0xFFFFFFFFu) {
++            snprintf(buf, sizeof(buf), ", invalid UTF-8 byte 0x%02X",
++                     (unsigned char)secret[i]);
++            if (!put(out, out_size, &o, buf)) return;
++        } else if (cp < 0x20 || cp == 0x7F) {
++            snprintf(buf, sizeof(buf), ", control U+%04X", (unsigned)cp);
++            if (!put(out, out_size, &o, buf)) return;
++        } else if (cp >= 0x80) {
++            const int k = lookalike(cp);
++            snprintf(buf, sizeof(buf), ", U+%04X%s%s", (unsigned)cp,
++                     k >= 0 ? " " : "", k >= 0 ? LOOKALIKE[k].name : "");
++            if (!put(out, out_size, &o, buf)) return;
++        }
++        i += n;
++    }
++}
++
++void portalweb_non_ascii_hint(const char *secret, char *out, size_t out_size)
++{
++    if (!out || !out_size) return;
++    out[0] = '\0';
++    if (!secret) return;
++
++    for (size_t i = 0; secret[i];) {
++        uint32_t cp;
++        const size_t n = utf8_one((const unsigned char *)secret + i, &cp);
++        if (cp == 0xFFFFFFFFu) {
++            snprintf(out, out_size, "a byte that is not valid text (0x%02X)",
++                     (unsigned char)secret[i]);
++            return;
++        }
++        if (cp >= 0x80) {
++            const int k = lookalike(cp);
++            if (k >= 0) {
++                snprintf(out, out_size, "a %s (U+%04X) -- the router probably wants %s",
++                         LOOKALIKE[k].name, (unsigned)cp, LOOKALIKE[k].ascii);
++            } else {
++                snprintf(out, out_size, "the character U+%04X, which a Wi-Fi "
++                         "password cannot contain", (unsigned)cp);
++            }
++            return;
++        }
++        i += n;
++    }
++}
++
++portalweb_plan_t portalweb_join_plan(portalweb_check_t kind, portalweb_net_t net)
++{
++    switch (kind) {
++    case PORTALWEB_OK_PSK:
++        /* Typed as a key. Even on a WPA3 network that is what was given,
++         * and the refusal will say so. */
++        return PORTALWEB_TRY_AS_TYPED;
++    case PORTALWEB_OK_PASSPHRASE:
++        return net == PORTALWEB_NET_WPA3_CAPABLE
++             ? PORTALWEB_TRY_PASSPHRASE_ONLY
++             : PORTALWEB_TRY_PSK_THEN_PASSPHRASE;
++    default:
++        return PORTALWEB_TRY_NONE;
++    }
++}
++
++const char *portalweb_pick_ssid(const char *chosen, const char *typed)
++{
++    if (typed && typed[0]) return typed;
++    if (chosen && chosen[0]) return chosen;
++    return "";
++}
+diff --git a/main/portalweb.h b/main/portalweb.h
+new file mode 100644
+index 0000000..ab2042f
+--- /dev/null
++++ b/main/portalweb.h
+@@ -0,0 +1,171 @@
++/*
++ * portalweb.h -- the parts of the setup portal that handle text from a
++ * stranger's phone, with no network code in them.
++ *
++ * Everything here reads bytes that anyone in radio range can send while
++ * the AP is open, which is why it is separate from portal.c: it runs
++ * under ASan and UBSan on a host, the same bargain wifistore made.
++ *
++ * defeatist-music-player-for-m5tab5's main/portalweb.h at 74535ca,
++ * unchanged but for the AP's name. Defeatist's hardware notes -- the
++ * WPA2/WPA3 join measurements below among them -- were taken on this
++ * board and this C6, so they are kept as they were written.
++ *
++ * SPDX-License-Identifier: MIT
++ */
++#pragma once
++
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/*
++ * Find `key` in an application/x-www-form-urlencoded body and decode its
++ * value into `out` as a NUL-terminated string.
++ *
++ * False when the key is absent, when a %-escape is malformed, when the
++ * value decodes to a NUL byte (an SSID may be arbitrary bytes, but not
++ * one that ends a C string early and so names a different network), or
++ * when it does not fit. A value that does not fit is refused rather than
++ * truncated: a truncated passphrase is a different passphrase, and a
++ * truncated SSID is a different network.
++ *
++ * The body is NOT assumed to be terminated; `len` is its length.
++ */
++bool portalweb_field(const char *body, size_t len, const char *key,
++                     char *out, size_t out_size);
++
++/*
++ * HTML-escape `in` into `out`: & < > " ' become entities, and bytes
++ * below 0x20 or equal to 0x7F become U+FFFD's UTF-8 so a crafted SSID
++ * cannot put control characters into the page. False, with `out` set to
++ * "", if it does not fit.
++ */
++bool portalweb_escape(const char *in, char *out, size_t out_size);
++
++/*
++ * "Aimless-XXXX" from a MAC: four hex digits of an FNV-1a hash of all
++ * six bytes, not the last two octets. See portal.h for why hashed.
++ */
++void portalweb_ap_name(const uint8_t mac[6], char *out, size_t out_size);
++
++typedef enum {
++    PORTALWEB_OK_PASSPHRASE = 0,    /* 8..63 printable ASCII             */
++    PORTALWEB_OK_PSK,               /* exactly 64 hex digits, as typed   */
++    PORTALWEB_BAD_SSID,             /* empty or longer than 32 bytes     */
++    PORTALWEB_NO_SECRET,            /* empty: open networks unsupported  */
++    PORTALWEB_BAD_SECRET,           /* wrong length or characters        */
++    PORTALWEB_NON_ASCII,            /* a byte >= 0x80: see below         */
++} portalweb_check_t;
++
++/*
++ * Whether a submitted pair can be tried at all, before the radio is
++ * touched. The lengths are WPA's own: a passphrase is 8 to 63 printable
++ * ASCII characters and 64 characters can only be a hex PSK.
++ *
++ * Open networks are refused, because wifistore stores a secret for every
++ * record and has nowhere to put "none". That is a gap, not a decision.
++ */
++portalweb_check_t portalweb_check(const char *ssid, const char *secret);
++
++/*
++ * SPECIAL CHARACTERS, WHICH IS WHERE PORTALS ACTUALLY FAIL.
++ *
++ * A WPA passphrase is printable ASCII, and a phone keyboard is not. iOS
++ * "smart punctuation" turns ' into a curly apostrophe, a dash into an en
++ * dash, and a paste can bring a no-break space; the router's password
++ * has none of those, so the join is refused and the person is sure they
++ * typed it right. portalweb_check() reports these as PORTALWEB_NON_ASCII
++ * rather than as a bad length, because "8 to 63 characters" is a false
++ * explanation of a curly quote.
++ *
++ * The two functions below are for saying which, without saying the
++ * password. The map project's portal logs the length, the first and last
++ * characters and every symbol for the same debugging purpose; this keeps
++ * only what diagnoses an ENCODING problem -- lengths, whitespace at the
++ * ends, a capitalised first letter, and the code points of anything that
++ * is not ASCII -- and nothing that narrows down which ASCII characters
++ * were typed. No first or last character, and nothing derived from the
++ * key.
++ */
++
++/*
++ * One line for the log, e.g.
++ *   "12 bytes, 11 chars, trailing space, U+2019 curly apostrophe"
++ * Always terminated; cut short with "..." if it does not fit.
++ */
++void portalweb_describe(const char *secret, char *out, size_t out_size);
++
++/*
++ * For the phone's page: the first non-ASCII character, named, with the
++ * ASCII a router most likely expects, e.g.
++ *   "a curly apostrophe (U+2019) -- the router probably wants '"
++ * or the code point alone for anything not in the short list. "" when
++ * there is none. The character itself is never echoed: the name comes
++ * from a table, not from the input.
++ */
++void portalweb_non_ascii_hint(const char *secret, char *out, size_t out_size);
++
++/*
++ * WHICH SECRET TO TRY FIRST.
++ *
++ * PSK-first exists so that a WPA2 network stores a key and never the
++ * passphrase. On hardware, a WPA2/WPA3 transition network refused the
++ * derived PSK with reason 202 twice, and the passphrase was stored
++ * anyway -- the station offers SAE, and SAE cannot use a precomputed
++ * key. So on a network the scan shows as WPA3-capable, the PSK attempt
++ * only costs time: go straight to the passphrase.
++ *
++ * On a WPA2-only network, or one the scan did not see (hidden, typed
++ * by hand, out of range when the scan ran), PSK first stays. Trying the
++ * passphrase first there and storing a derived key afterwards would be
++ * as good -- if the passphrase joins, the PBKDF2 key is correct by
++ * construction -- but it would store a 64-hex key that no join on this
++ * C6 had ever used when this was written.
++ *
++ * Half of that is now measured. Eighth flash, Suscore, a WPA2-only guest
++ * network on the same router as the WPA2/WPA3 fivescore, channel 10:
++ *
++ *   tab5_portal: trying Suscore (PSK, then passphrase: WPA2 network)
++ *   tab5_wifi: joined Suscore
++ *   tab5_portal: saved Suscore as PSK
++ *
++ * The derived 64-hex PSK joined on the first attempt. What is left is
++ * the stored PSK joining at the next boot, from wifistore, through the
++ * worker -- "saved network 1 of 2 in range: Suscore" and an address.
++ */
++typedef enum {
++    PORTALWEB_NET_UNKNOWN = 0,      /* not in the scan, or an auth mode
++                                       this does not reason about */
++    PORTALWEB_NET_WPA2_ONLY,        /* WPA, WPA2, WPA/WPA2 */
++    PORTALWEB_NET_WPA3_CAPABLE,     /* WPA3, WPA2/WPA3 */
++} portalweb_net_t;
++
++typedef enum {
++    PORTALWEB_TRY_NONE = 0,             /* the pair did not check out */
++    PORTALWEB_TRY_AS_TYPED,             /* a 64-hex PSK: exactly that */
++    PORTALWEB_TRY_PSK_THEN_PASSPHRASE,  /* derive, try, fall back */
++    PORTALWEB_TRY_PASSPHRASE_ONLY,      /* WPA3-capable: skip the PSK */
++} portalweb_plan_t;
++
++portalweb_plan_t portalweb_join_plan(portalweb_check_t kind, portalweb_net_t net);
++
++/*
++ * The form has a <select> of scanned networks and a text field for one
++ * that is hidden or was not heard. `chosen` and `typed` are those two
++ * decoded values, either possibly "". A typed name wins when there is
++ * one -- typing is the deliberate act, and a <select> always submits
++ * something. Returns whichever applies, or "" for neither; never NULL.
++ */
++const char *portalweb_pick_ssid(const char *chosen, const char *typed);
++
++/* Lower-case hex of `n` bytes into `out`, which needs 2n + 1. */
++void portalweb_hex(const uint8_t *in, size_t n, char *out);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/test/Makefile b/test/Makefile
+index 6da0b2a..7fc063e 100644
+--- a/test/Makefile
++++ b/test/Makefile
+@@ -14,6 +14,9 @@
+ #
+ # builddatetest: main/builddate.h, the dates daily builds are named for.
+ #
++# portalwebtest: main/portalweb.c and main/dnsreply.c, the setup portal's
++# form and DNS -- the code that reads bytes from anyone in radio range.
++#
+ # -fno-sanitize=shift: raster.c converts to fixed point with
+ # `v << RS_FRAC_BITS` on signed values that can be negative (geometry
+ # outside the tile). That is undefined in C11 and does the arithmetic
+@@ -34,7 +37,7 @@ LDFLAGS := -fsanitize=address,undefined -fno-sanitize=shift -lm
+ CORE_SRCS := $(CORE)/src/inflate.c $(CORE)/src/mvt.c $(CORE)/src/pmtiles.c \
+              $(CORE)/src/raster.c $(CORE)/src/style.c $(CORE)/src/tile_grid.c
+ 
+-all: run-maptile run-nmea run-mapview run-tilesrc run-builddate
++all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb
+ 
+ maptiletest: maptiletest.c ../main/maptile.c ../main/maptile.h $(CORE_SRCS) fixture.pmtiles
+ 	$(CC) $(CFLAGS) -o $@ maptiletest.c ../main/maptile.c $(CORE_SRCS) $(LDFLAGS)
+@@ -66,7 +69,13 @@ builddatetest: builddatetest.c ../main/builddate.h
+ run-builddate: builddatetest
+ 	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./builddatetest
+ 
++portalwebtest: portalwebtest.c ../main/portalweb.c ../main/portalweb.h ../main/dnsreply.c ../main/dnsreply.h
++	$(CC) $(CFLAGS) -o $@ portalwebtest.c ../main/portalweb.c ../main/dnsreply.c $(LDFLAGS)
++
++run-portalweb: portalwebtest
++	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./portalwebtest
++
+ clean:
+-	rm -f maptiletest nmeatest mapviewtest tilesrctest builddatetest
++	rm -f maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest
+ 
+-.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate clean
++.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb clean
+diff --git a/test/portalwebtest.c b/test/portalwebtest.c
+new file mode 100644
+index 0000000..109055a
+--- /dev/null
++++ b/test/portalwebtest.c
+@@ -0,0 +1,311 @@
++/*
++ * portalwebtest.c -- the portal's input handling and its DNS replies,
++ * against the real main/portalweb.c and main/dnsreply.c. Both read bytes
++ * from anyone in radio range, which is the whole reason they are pure.
++ *
++ * defeatist-music-player-for-m5tab5's texttest/portalwebtest.c at
++ * 74535ca, with the AP name's checks for "Aimless-".
++ *
++ * SPDX-License-Identifier: MIT
++ */
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++
++#include "dnsreply.h"
++#include "portalweb.h"
++
++static int checks, failures;
++
++#define CHECK(cond, ...) do {                                   \
++    checks++;                                                   \
++    if (!(cond)) {                                              \
++        failures++;                                             \
++        printf("  FAIL %s:%d: ", __FILE__, __LINE__);           \
++        printf(__VA_ARGS__);                                    \
++        printf("\n");                                           \
++    }                                                           \
++} while (0)
++
++static bool field(const char *body, const char *key, char *out, size_t n)
++{
++    return portalweb_field(body, strlen(body), key, out, n);
++}
++
++/* A query for `name`, type/class as given. Returns its length. */
++static size_t query(uint8_t *q, const char *name, uint16_t type, uint16_t cls)
++{
++    const uint8_t hdr[12] = { 0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0 };
++    memcpy(q, hdr, 12);
++    size_t p = 12;
++    const char *s = name;
++    while (*s) {
++        const char *dot = strchr(s, '.');
++        const size_t l = dot ? (size_t)(dot - s) : strlen(s);
++        q[p++] = (uint8_t)l;
++        memcpy(q + p, s, l);
++        p += l;
++        s += l + (dot ? 1 : 0);
++    }
++    q[p++] = 0;
++    q[p++] = (uint8_t)(type >> 8); q[p++] = (uint8_t)type;
++    q[p++] = (uint8_t)(cls >> 8);  q[p++] = (uint8_t)cls;
++    return p;
++}
++
++int main(void)
++{
++    char out[128];
++
++    printf("form fields decode, and only whole ones\n");
++    CHECK(field("ssid=Dave%27s+WiFi&pass=hunter22", "ssid", out, sizeof out) &&
++          strcmp(out, "Dave's WiFi") == 0, "got '%s'", out);
++    CHECK(field("ssid=a&pass=p%40ss+w%2Bord", "pass", out, sizeof out) &&
++          strcmp(out, "p@ss w+ord") == 0, "got '%s'", out);
++    CHECK(!field("xssid=a", "ssid", out, sizeof out), "prefix of another key matched");
++    CHECK(!field("ssidx=a", "ssid", out, sizeof out), "longer key matched");
++    CHECK(field("pass=x&ssid=", "ssid", out, sizeof out) && out[0] == '\0', "empty value");
++    CHECK(!field("ssid", "ssid", out, sizeof out), "bare key taken as a field");
++    CHECK(!field("", "ssid", out, sizeof out), "empty body");
++
++    printf("a broken escape is refused, not guessed at\n");
++    CHECK(!field("ssid=ab%4", "ssid", out, sizeof out), "short escape at end");
++    CHECK(!field("ssid=ab%4&x=1", "ssid", out, sizeof out), "short escape before &");
++    CHECK(!field("ssid=ab%zz", "ssid", out, sizeof out), "non-hex escape");
++    CHECK(!field("ssid=ab%", "ssid", out, sizeof out), "lone %%");
++    CHECK(!field("ssid=a%00b", "ssid", out, sizeof out), "NUL decoded");
++
++    printf("a value that does not fit is refused, not truncated\n");
++    CHECK(field("s=1234567", "s", out, 8) && strcmp(out, "1234567") == 0, "exact fit");
++    CHECK(!field("s=12345678", "s", out, 8) && out[0] == '\0', "one over: '%s'", out);
++
++    printf("the body is not assumed to be terminated\n");
++    {
++        const char body[] = { 's','s','i','d','=','a','b','c','X','X' };
++        CHECK(portalweb_field(body, 8, "ssid", out, sizeof out) &&
++              strcmp(out, "abc") == 0, "got '%s'", out);
++    }
++
++    printf("an SSID cannot become markup\n");
++    CHECK(portalweb_escape("<b onload='x'>&\"", out, sizeof out) &&
++          strcmp(out, "&lt;b onload=&#39;x&#39;&gt;&amp;&quot;") == 0, "got '%s'", out);
++    CHECK(portalweb_escape("a\x01" "b\x7f", out, sizeof out) &&
++          strcmp(out, "a\xEF\xBF\xBD" "b\xEF\xBF\xBD") == 0, "control bytes");
++    CHECK(portalweb_escape("caf\xC3\xA9", out, sizeof out) &&
++          strcmp(out, "caf\xC3\xA9") == 0, "UTF-8 passes through");
++    CHECK(!portalweb_escape("&&", out, 10) && out[0] == '\0', "overflow not refused");
++    CHECK(portalweb_escape("&&", out, 11) && strcmp(out, "&amp;&amp;") == 0, "exact fit");
++
++    printf("the AP name is stable, hashed, and differs between devices\n");
++    {
++        const uint8_t a[6] = { 0x30, 0xED, 0xA0, 0x12, 0x34, 0x56 };
++        const uint8_t b[6] = { 0x30, 0xED, 0xA0, 0x12, 0x34, 0x57 };
++        char na[20], nb[20], na2[20];
++        portalweb_ap_name(a, na, sizeof na);
++        portalweb_ap_name(b, nb, sizeof nb);
++        portalweb_ap_name(a, na2, sizeof na2);
++        CHECK(strlen(na) == 12 && strncmp(na, "Aimless-", 8) == 0, "got '%s'", na);
++        CHECK(strcmp(na, na2) == 0, "not stable");
++        CHECK(strcmp(na, nb) != 0, "neighbours collide: %s", na);
++        CHECK(strstr(na, "3456") == NULL && strstr(na, "5634") == NULL, "publishes the octets: %s", na);
++        char tiny[8] = "x";
++        portalweb_ap_name(a, tiny, sizeof tiny);
++        CHECK(tiny[0] == '\0', "truncated name written");
++    }
++
++    printf("credentials are checked by WPA's own lengths\n");
++    CHECK(portalweb_check("home", "12345678") == PORTALWEB_OK_PASSPHRASE, "8");
++    CHECK(portalweb_check("home", "123456789012345678901234567890123456789012345678901234567890123") == PORTALWEB_OK_PASSPHRASE, "63");
++    CHECK(portalweb_check("home", "1234567") == PORTALWEB_BAD_SECRET, "7");
++    CHECK(portalweb_check("home", "0123456789abcdef0123456789ABCDEF0123456789abcdef0123456789abcdef") == PORTALWEB_OK_PSK, "64 hex");
++    CHECK(portalweb_check("home", "0123456789abcdef0123456789ABCDEF0123456789abcdef0123456789abcdeg") == PORTALWEB_BAD_SECRET, "64 not hex");
++    CHECK(portalweb_check("home", "pass\tword") == PORTALWEB_BAD_SECRET, "control char");
++    CHECK(portalweb_check("home", "") == PORTALWEB_NO_SECRET, "open");
++    CHECK(portalweb_check("", "12345678") == PORTALWEB_BAD_SSID, "empty ssid");
++    CHECK(portalweb_check("123456789012345678901234567890123", "12345678") == PORTALWEB_BAD_SSID, "33-byte ssid");
++    CHECK(portalweb_check("12345678901234567890123456789012", "12345678") == PORTALWEB_OK_PASSPHRASE, "32-byte ssid");
++
++    printf("autocorrect characters are their own answer, not a length problem\n");
++    CHECK(portalweb_check("home", "Dave\xE2\x80\x99s pass") == PORTALWEB_NON_ASCII, "curly apostrophe");
++    CHECK(portalweb_check("home", "ab\xE2\x80\x99") == PORTALWEB_NON_ASCII, "short and curly: not BAD_SECRET");
++    CHECK(portalweb_check("home", "caf\xC3\xA9" "caf\xC3\xA9") == PORTALWEB_NON_ASCII, "accented letter");
++    CHECK(portalweb_check("home", "abc\xFF" "defgh") == PORTALWEB_NON_ASCII, "invalid UTF-8");
++
++    printf("the hint names the character from a table, never from the input\n");
++    {
++        char hint[160];
++        portalweb_non_ascii_hint("Dave\xE2\x80\x99s pass", hint, sizeof hint);
++        CHECK(strstr(hint, "curly apostrophe") && strstr(hint, "U+2019") && strstr(hint, "wants '"),
++              "got '%s'", hint);
++        CHECK(strstr(hint, "\xE2\x80\x99") == NULL && strstr(hint, "Dave") == NULL,
++              "echoes the input: '%s'", hint);
++        portalweb_non_ascii_hint("a\xE2\x80\x93" "b", hint, sizeof hint);
++        CHECK(strstr(hint, "en dash") && strstr(hint, "wants -"), "got '%s'", hint);
++        portalweb_non_ascii_hint("pass\xC2\xA0word", hint, sizeof hint);
++        CHECK(strstr(hint, "no-break space") != NULL, "got '%s'", hint);
++        portalweb_non_ascii_hint("\xE6\x97\xA5\xE6\x9C\xAC", hint, sizeof hint);
++        CHECK(strstr(hint, "U+65E5") != NULL, "unlisted: '%s'", hint);
++        portalweb_non_ascii_hint("ab\xC0\xAF", hint, sizeof hint);
++        CHECK(strstr(hint, "not valid text (0xC0)") != NULL, "overlong: '%s'", hint);
++        portalweb_non_ascii_hint("ab\xED\xA0\x80", hint, sizeof hint);
++        CHECK(strstr(hint, "not valid text") != NULL, "surrogate: '%s'", hint);
++        portalweb_non_ascii_hint("plainascii", hint, sizeof hint);
++        CHECK(hint[0] == '\0', "ascii gives no hint: '%s'", hint);
++        portalweb_non_ascii_hint("ab\xE2\x80", hint, sizeof hint);
++        CHECK(strstr(hint, "not valid text") != NULL, "truncated sequence: '%s'", hint);
++    }
++
++    printf("the log line diagnoses encoding and names no typed ASCII\n");
++    {
++        char d[160];
++        portalweb_describe(" Hunter7\xE2\x80\x99 ", d, sizeof d);
++        CHECK(strstr(d, "12 bytes, 10 chars") != NULL, "counts: '%s'", d);
++        CHECK(strstr(d, "leading space") && strstr(d, "trailing space"), "spaces: '%s'", d);
++        CHECK(strstr(d, "U+2019 curly apostrophe") != NULL, "code point: '%s'", d);
++        CHECK(strstr(d, "capital") == NULL, "leading space means no capital: '%s'", d);
++        CHECK(strchr(d, 'H') == NULL && strstr(d, "unter") == NULL && strchr(d, '7') == NULL,
++              "an ASCII character of the input leaked: '%s'", d);
++        portalweb_describe("Password1", d, sizeof d);
++        CHECK(strcmp(d, "9 bytes, 9 chars, first letter capital") == 0, "got '%s'", d);
++        portalweb_describe("tab\there", d, sizeof d);
++        CHECK(strstr(d, "control U+0009") != NULL, "control: '%s'", d);
++        portalweb_describe("x", d, sizeof d);
++        CHECK(strcmp(d, "1 byte, 1 char") == 0, "singular: '%s'", d);
++        portalweb_describe("", d, sizeof d);
++        CHECK(strcmp(d, "0 bytes, 0 chars") == 0, "empty: '%s'", d);
++
++        /* Every length of buffer: terminated, never past its end. */
++        const char *hard = " \xE2\x80\x98\xE2\x80\x99\xE2\x80\x9C\xE2\x80\x9D\xC2\xA0\xFF\x01 ";
++        int bad = 0;
++        for (size_t size = 1; size < 160; size++) {
++            char b[160];
++            memset(b, 'Z', sizeof b);
++            portalweb_describe(hard, b, size);
++            size_t len = 0;
++            while (len < size && b[len]) len++;
++            if (len >= size) bad++;
++            if (size < sizeof b && b[size] != 'Z') bad++;
++        }
++        CHECK(bad == 0, "%d buffer sizes overran or went unterminated", bad);
++        portalweb_describe(hard, d, 24);
++        CHECK(strlen(d) <= 23 && strcmp(d + strlen(d) - 3, "...") == 0, "cut short: '%s'", d);
++    }
++
++    printf("the join plan: skip the PSK only where the scan shows WPA3\n");
++    CHECK(portalweb_join_plan(PORTALWEB_OK_PASSPHRASE, PORTALWEB_NET_WPA3_CAPABLE)
++          == PORTALWEB_TRY_PASSPHRASE_ONLY, "WPA3-capable");
++    CHECK(portalweb_join_plan(PORTALWEB_OK_PASSPHRASE, PORTALWEB_NET_WPA2_ONLY)
++          == PORTALWEB_TRY_PSK_THEN_PASSPHRASE, "WPA2 only keeps PSK first");
++    CHECK(portalweb_join_plan(PORTALWEB_OK_PASSPHRASE, PORTALWEB_NET_UNKNOWN)
++          == PORTALWEB_TRY_PSK_THEN_PASSPHRASE, "not scanned keeps PSK first");
++    for (int net = PORTALWEB_NET_UNKNOWN; net <= PORTALWEB_NET_WPA3_CAPABLE; net++) {
++        CHECK(portalweb_join_plan(PORTALWEB_OK_PSK, (portalweb_net_t)net)
++              == PORTALWEB_TRY_AS_TYPED, "typed PSK tried as typed, net %d", net);
++        CHECK(portalweb_join_plan(PORTALWEB_BAD_SECRET, (portalweb_net_t)net)
++              == PORTALWEB_TRY_NONE, "bad secret, net %d", net);
++        CHECK(portalweb_join_plan(PORTALWEB_NO_SECRET, (portalweb_net_t)net)
++              == PORTALWEB_TRY_NONE, "no secret, net %d", net);
++        CHECK(portalweb_join_plan(PORTALWEB_NON_ASCII, (portalweb_net_t)net)
++              == PORTALWEB_TRY_NONE, "non-ascii, net %d", net);
++        CHECK(portalweb_join_plan(PORTALWEB_BAD_SSID, (portalweb_net_t)net)
++              == PORTALWEB_TRY_NONE, "bad ssid, net %d", net);
++    }
++
++    printf("the form's two network fields: typed wins, then chosen\n");
++    CHECK(strcmp(portalweb_pick_ssid("fivescore", ""), "fivescore") == 0, "chosen only");
++    CHECK(strcmp(portalweb_pick_ssid("", "MyHotspot"), "MyHotspot") == 0, "typed only");
++    CHECK(strcmp(portalweb_pick_ssid("fivescore", "MyHotspot"), "MyHotspot") == 0, "both: typed wins");
++    CHECK(strcmp(portalweb_pick_ssid("", ""), "") == 0, "neither");
++    CHECK(strcmp(portalweb_pick_ssid(NULL, NULL), "") == 0, "nulls");
++    CHECK(strcmp(portalweb_pick_ssid(NULL, "x"), "x") == 0, "null chosen");
++    {
++        /* End to end through the real form decoder, as h_join does it. */
++        const char *body = "ssid=&ssid_other=Pixel+7%27s+hotspot&pass=abcdefgh";
++        char c[33], ty[33];
++        const bool gc = portalweb_field(body, strlen(body), "ssid", c, sizeof c);
++        const bool gt = portalweb_field(body, strlen(body), "ssid_other", ty, sizeof ty);
++        CHECK(gc && c[0] == '\0' && gt, "fields decode");
++        CHECK(strcmp(portalweb_pick_ssid(c, ty), "Pixel 7's hotspot") == 0, "hidden name typed");
++        /* "ssid" must not match "ssid_other" as a prefix, in either order. */
++        const char *swapped = "ssid_other=typed&ssid=chosen";
++        CHECK(portalweb_field(swapped, strlen(swapped), "ssid", c, sizeof c) &&
++              strcmp(c, "chosen") == 0, "ssid is not ssid_other: '%s'", c);
++    }
++
++    printf("hex is lower case and terminated\n");
++    {
++        const uint8_t b[3] = { 0x00, 0xAB, 0xff };
++        char h[7];
++        portalweb_hex(b, 3, h);
++        CHECK(strcmp(h, "00abff") == 0, "got '%s'", h);
++    }
++
++    printf("DNS: every A query gets this device\n");
++    {
++        uint8_t q[DNSREPLY_MAX], r[DNSREPLY_MAX];
++        const uint8_t ip[4] = { 192, 168, 4, 1 };
++        size_t n = query(q, "connectivitycheck.gstatic.com", 1, 1);
++        size_t m = dnsreply_build(q, n, ip, r, sizeof r);
++        CHECK(m == n + 16, "length %zu for query %zu", m, n);
++        CHECK(r[0] == 0x12 && r[1] == 0x34, "id not echoed");
++        CHECK((r[2] & 0x80) && (r[2] & 0x04) && (r[2] & 0x01), "flags %02x", r[2]);
++        CHECK((r[3] & 0x0F) == 0, "rcode %d", r[3] & 0x0F);
++        CHECK(r[6] == 0 && r[7] == 1, "ancount");
++        CHECK(memcmp(r + 12, q + 12, n - 12) == 0, "question not echoed");
++        CHECK(r[n] == 0xC0 && r[n + 1] == 0x0C, "name pointer");
++        CHECK(memcmp(r + n + 12, ip, 4) == 0, "address");
++
++        printf("DNS: AAAA gets no records, so the phone does not wait on v6\n");
++        n = query(q, "captive.apple.com", 28, 1);
++        m = dnsreply_build(q, n, ip, r, sizeof r);
++        CHECK(m == n && r[7] == 0 && (r[3] & 0x0F) == 0, "len %zu an %d", m, r[7]);
++
++        printf("DNS: EDNS additional records are not echoed\n");
++        n = query(q, "example.com", 1, 1);
++        q[11] = 1;                       /* ARCOUNT = 1 */
++        const uint8_t opt[11] = { 0, 0, 41, 0x10, 0, 0, 0, 0, 0, 0, 0 };
++        memcpy(q + n, opt, sizeof opt);
++        m = dnsreply_build(q, n + sizeof opt, ip, r, sizeof r);
++        CHECK(m == n + 16 && r[11] == 0, "len %zu arcount %d", m, r[11]);
++
++        printf("DNS: what does not get a reply\n");
++        n = query(q, "example.com", 1, 1);
++        uint8_t bad[DNSREPLY_MAX];
++        memcpy(bad, q, n); bad[2] |= 0x80;
++        CHECK(dnsreply_build(bad, n, ip, r, sizeof r) == 0, "a response");
++        memcpy(bad, q, n); bad[2] |= 0x10;
++        CHECK(dnsreply_build(bad, n, ip, r, sizeof r) == 0, "opcode");
++        memcpy(bad, q, n); bad[5] = 2;
++        CHECK(dnsreply_build(bad, n, ip, r, sizeof r) == 0, "two questions");
++        CHECK(dnsreply_build(q, n - 1, ip, r, sizeof r) == 0, "truncated qclass");
++        CHECK(dnsreply_build(q, 11, ip, r, sizeof r) == 0, "short header");
++        memcpy(bad, q, n); bad[12] = 0xC0; bad[13] = 0x0C;
++        CHECK(dnsreply_build(bad, n, ip, r, sizeof r) == 0, "pointer in question");
++        memcpy(bad, q, n); bad[12] = 63;   /* label runs off the end */
++        CHECK(dnsreply_build(bad, n, ip, r, sizeof r) == 0, "label past end");
++        CHECK(dnsreply_build(q, n, ip, r, n + 15) == 0, "reply buffer one short");
++        CHECK(dnsreply_build(q, n, ip, r, n + 16) == n + 16, "reply buffer exact");
++
++        /* A name of 64 labels of 3 bytes: 256 bytes, one past the limit. */
++        size_t p = 12;
++        memcpy(bad, q, 12);
++        for (int i = 0; i < 64; i++) { bad[p++] = 3; bad[p++] = 'a'; bad[p++] = 'b'; bad[p++] = 'c'; }
++        bad[p++] = 0; bad[p++] = 0; bad[p++] = 1; bad[p++] = 0; bad[p++] = 1;
++        CHECK(dnsreply_build(bad, p, ip, r, sizeof r) == 0, "overlong name");
++
++        /* Every truncation of a good query, and random garbage. */
++        int replied = 0;
++        for (size_t k = 0; k < n; k++) replied += dnsreply_build(q, k, ip, r, sizeof r) != 0;
++        CHECK(replied == 0, "%d truncations replied", replied);
++        uint32_t s = 1;
++        for (int t = 0; t < 200000; t++) {
++            size_t len = 12 + (s % 80);
++            for (size_t k = 0; k < len; k++) { s = s * 1103515245u + 12345u; bad[k] = (uint8_t)(s >> 16); }
++            bad[2] &= 0x07; bad[4] = 0; bad[5] = 1;   /* make most of them reach the parser */
++            (void)dnsreply_build(bad, len, ip, r, sizeof r);
++        }
++    }
++
++    printf("\n%d checks, %d failures\n", checks, failures);
++    return failures ? 1 : 0;
++}
+-- 
+2.43.0
+
