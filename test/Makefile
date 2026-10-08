@@ -23,6 +23,9 @@
 # suntest: main/sun.c, sunrise and sunset against astral's, and the
 # day/night question asked of them.
 #
+# uirowtest: main/uirow.c, where the buttons, the pan squares, the wake
+# zone and the settings panel are, and what a touch hits.
+#
 # -fno-sanitize=shift: raster.c converts to fixed point with
 # `v << RS_FRAC_BITS` on signed values that can be negative (geometry
 # outside the tile). That is undefined in C11 and does the arithmetic
@@ -43,7 +46,7 @@ LDFLAGS := -fsanitize=address,undefined -fno-sanitize=shift -lm
 CORE_SRCS := $(CORE)/src/inflate.c $(CORE)/src/mvt.c $(CORE)/src/pmtiles.c \
              $(CORE)/src/raster.c $(CORE)/src/style.c $(CORE)/src/tile_grid.c
 
-all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun
+all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow
 
 maptiletest: maptiletest.c ../main/maptile.c ../main/maptile.h $(CORE_SRCS) fixture.pmtiles
 	$(CC) $(CFLAGS) -o $@ maptiletest.c ../main/maptile.c $(CORE_SRCS) $(LDFLAGS)
@@ -93,7 +96,13 @@ suntest: suntest.c ../main/sun.c ../main/sun.h
 run-sun: suntest
 	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./suntest
 
-clean:
-	rm -f maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest suntest
+uirowtest: uirowtest.c ../main/uirow.c ../main/uirow.h
+	$(CC) $(CFLAGS) -o $@ uirowtest.c ../main/uirow.c $(LDFLAGS)
 
-.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun clean
+run-uirow: uirowtest
+	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./uirowtest
+
+clean:
+	rm -f maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest suntest uirowtest
+
+.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow clean

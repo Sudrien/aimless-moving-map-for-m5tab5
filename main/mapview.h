@@ -82,6 +82,10 @@ void mapview_init(mapview_t *v, mapview_draw_fn draw, void *draw_ctx,
 /* Follow a position. Queues whatever tiles it brings into the grid. */
 void mapview_centre(mapview_t *v, double lat, double lon);
 
+/* The same, at a point in tiles at the view's zoom -- where a pan has put
+ * the view (0016), which is not a position anyone measured. */
+void mapview_centre_tiles(mapview_t *v, double fx, double fy);
+
 /* Render the nearest queued tile. True if one was rendered (whatever its
  * result); false with nothing queued. */
 bool mapview_step(mapview_t *v);

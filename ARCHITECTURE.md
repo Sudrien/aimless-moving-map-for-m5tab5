@@ -413,3 +413,52 @@ Host: suntest (52 checks), and mapviewtest's restyle checks (9).
 Device: aimless.c compiled -fsyntax-only as before, not built. On the
 board: "sun: rise HH:MMZ set HH:MMZ at lat,lon; now day|night" when it
 changes, then "palette: night|day".
+
+### 0016 -- the button row, settings, pan and screen off
+
+The original's footer row and settings panel, its 3 x 3 pan, and its
+screen off, minus what belongs to features not here yet: the compass's
+two settings rows (and the compass itself, which is not coming), place
+names, Wi-Fi location, saved points and the area cache.
+
+**uirow.c is the geometry**, with no drawing in it, so the hit tests run
+on the host (uirowtest): the row's five slots (54 px, 12 px apart, the
+touch zone 26 px up into the map and to the screen's edge), the pan
+squares over the map between the status bar and that zone, the wake
+zone (the middle ninth, where no button is), and the settings panel
+(three quarters of the width, rows of 62 px, close at its bottom left).
+Every number is the original's.
+
+**Five slots, three buttons.** Home, settings and screen off are where
+the original put them; the saved points and area cache slots stay empty
+rather than the row closing up, so nothing moves when they arrive.
+
+**Pan** is the original's anchor: the view follows an anchor that is the
+marker until a tap on the map's edge moves it a third of the map
+(MARKER_BAND) that way. While panned, fixes move the marker and not the
+view, and a marker off the screen is not drawn. "recentre" is lit, as
+there, because a panned view nobody remembers panning is the failure it
+exists for; pressing it centres at once rather than at the next fix.
+mapview_centre_tiles() takes the anchor, since it is not a position
+anyone measured. The original also held the marker in a band before the
+view moved; this still centres on it exactly, and that stays so.
+
+**Settings**: the palette (auto, day, night), the backlight (auto, low,
+medium, high -- the three automatic levels, as the original's
+brightnessWanted()), and the Wi-Fi network, which opens 0012's portal.
+Overrides cycle back to auto and are not kept across a restart, as
+there. A fixed backlight overrides the palette's dimming as well.
+
+**Screen off** draws the wake target for 700 ms and turns the backlight
+to 0, as the original's screenOff(), and drops a pan. Unlike it, the
+render task keeps drawing tiles, so the grid is ready on waking at the
+cost of the power the original saved by stopping.
+
+The panel and buttons are drawn over every composed frame, square
+rather than rounded (gfx has no rounded rectangle). The setup box moves
+up above the row's touch zone.
+
+Host: uirowtest (73 checks) and one more in mapviewtest. Device:
+aimless.c compiled -fsyntax-only as before, not built. On the board:
+"pan: ...", "palette: auto|day|night", "brightness: N", "screen:
+off|on", "setup: asked for from settings".

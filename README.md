@@ -47,8 +47,28 @@ What works:
   side of sunrise and sunset. It needs a fix, or the network's clock and
   an earlier fix.
 
-Not yet: labels, the compass, waypoints, and the original's buttons --
-so no manual day/night or brightness override. See `ARCHITECTURE.md`.
+- The original's button row and settings panel, and panning by touch.
+
+Not yet: labels, saved points, the area cache. See `ARCHITECTURE.md`.
+
+## On the screen
+
+Along the bottom, three buttons, where the original had them:
+
+- **centred / recentre** -- lit while you have panned the map away from
+  where you are; press it to follow your position again.
+- **settings** -- the palette (auto, day, night), the brightness (auto,
+  low, medium, high) and the Wi-Fi network. Tap a row to change it, and
+  anywhere outside the panel to close it. The overrides last until the
+  next restart.
+- **screen off** -- the backlight goes off; GNSS and tile downloads carry
+  on. Touch the middle of the screen to wake it.
+
+Tap the map's edges and corners to pan a third of a screen that way. The
+middle is left alone: that is where your position is drawn.
+
+The two empty places in the row are for saved points and the area
+cache, which are still to come.
 
 ## Networks
 
@@ -58,8 +78,8 @@ join a network there and this program joins it too, and the other way
 round. A USB Ethernet adapter (ASIX, or Realtek in CDC-ECM mode) works
 without anything saved.
 
-To add a network here, touch the screen while it says so at startup, or
-start with nothing saved. The map comes up as usual, with a box along
+To add a network here, choose "wifi network" in settings, touch the
+screen while it says so at startup, or start with nothing saved. The map comes up as usual, with a box along
 the bottom naming a network, `Aimless-` and four letters: join it on a
 phone, and the setup page opens (or open `http://192.168.4.1/`). Choose
 a network and type its password; it is tried before it is saved. The

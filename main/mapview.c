@@ -150,6 +150,12 @@ static bool coarse_cell(const mapview_t *v, tile_id_t id, int *ox, int *oy)
 void mapview_centre(mapview_t *v, double lat, double lon)
 {
     const merc_pt_t p = merc_from_ll(lat, lon, v->z);
+    mapview_centre_tiles(v, p.x, p.y);
+}
+
+void mapview_centre_tiles(mapview_t *v, double fx, double fy)
+{
+    const merc_pt_t p = { fx, fy, v->z };
     v->fx = p.x;
     v->fy = p.y;
     v->placed = true;

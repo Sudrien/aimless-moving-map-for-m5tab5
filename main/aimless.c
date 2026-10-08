@@ -19,7 +19,8 @@
  *   setup         M5Launcher's saved networks imported (launcher_import.h),
  *                 or the setup portal (portal.h): with nothing saved, or
  *                 with a touch in the first two seconds, as the original
- *   this loop     follow the fix, draw, and the setup box over the map
+ *   this loop     follow the fix (or a pan), draw, the button row and the
+ *                 settings panel, the setup box over the map, touch
  *
  * What the original did that this does not yet: labels, place names,
  * zoom levels other than z14, the compass, waypoints, Wi-Fi location,
@@ -71,6 +72,8 @@
 #include "netremote.h"
 #include "portal.h"
 #include "tilesrc.h"
+#include "uirow.h"
+#include "mercator.h"
 
 static const char *TAG = "aimless";
 
@@ -161,6 +164,20 @@ static volatile bool s_online;
  * render task changes it, between tiles (0015). */
 static volatile bool s_want_dark;
 static bool s_dark;
+
+/* The controls (0016). This loop's own; nothing else reads them. */
+static ui_theme_t  s_theme;         /* the palette override */
+static ui_bright_t s_bright;        /* the backlight override */
+static bool        s_sun_dark;      /* what the sun alone says, for the panel */
+static int         s_backlight = -1;    /* percent in force; -1 to reapply */
+static bool        s_panel;         /* the settings panel is open */
+static bool        s_screen_off;
+/* Pan: the view follows an anchor, which is the marker until a pan moves
+ * it (original/mapengine.cpp g_anchor_wx). In tiles at VIEW_ZOOM. */
+static bool        s_panning;
+static double      s_anchor_x, s_anchor_y;
+static bool        s_mark_ok;       /* a measured position, to draw */
+static double      s_mark_x, s_mark_y;
 
 /*
  * Wi-Fi setup, as this loop moves through it. Read by the network's
@@ -275,7 +292,8 @@ static void setup_box_rect(int *x, int *y, int *w, int *h)
     *x = SETUP_MARGIN;
     *w = gfx_w() - 2 * SETUP_MARGIN;
     *h = SETUP_H;
-    *y = gfx_h() - SETUP_MARGIN - SETUP_H;
+    /* Above the button row's touch zone (0016), not over it. */
+    *y = ui_map_bottom(gfx_h()) - SETUP_H - 10;
 }
 
 /* What the box says, three lines; false when there is no box. The SSIDs
@@ -343,22 +361,164 @@ static void draw_setup(void)
     if (c[0]) gfx_draw_text(tx, y + SETUP_PAD + 2 * SETUP_LINE, c, TEXT_SCALE, tw, COL_WAIT);
 }
 
+/* ---- the button row and the settings panel (0016) ---- */
+
+/* src: original/tab5_map.cpp drawFooter() and setRowText()'s colours. */
+#define COL_BTN         RGB(70, 70, 70)
+#define COL_BTN_LIT     RGB(150, 60, 30)    /* recentre: noticed across a dashboard */
+#define COL_BTN_EDGE    RGB(255, 255, 255)
+#define COL_PANEL_BG    RGB(20, 20, 26)
+#define COL_ROW_BG      RGB(45, 45, 55)
+#define COL_CHIP_AUTO   RGB(60, 90, 60)     /* at its automatic default */
+#define COL_CHIP_SET    RGB(60, 80, 110)    /* held by hand */
+#define COL_CHIP_NET    RGB(40, 70, 150)
+#define COL_NOTE        RGB(190, 190, 190)
+#define COL_DIM         RGB(128, 128, 128)
+
+/* A box: a white edge two pixels wide round a fill. The original's were
+ * rounded; gfx has no rounded rectangle and this is not the place to
+ * add one. */
+static void box(int x, int y, int w, int h, uint16_t fill, uint16_t edge)
+{
+    gfx_fill_rect(x, y, w, h, edge);
+    gfx_fill_rect(x + 2, y + 2, w - 4, h - 4, fill);
+}
+
+static void text_centred(int cx, int cy, const char *s, int max_w, uint16_t c)
+{
+    int tw = gfx_text_w(s, TEXT_SCALE);
+    if (tw > max_w) tw = max_w;
+    gfx_draw_text(cx - tw / 2, cy - GFX_GLYPH_H(TEXT_SCALE) / 2, s, TEXT_SCALE, max_w, c);
+}
+
+static void draw_footer(void)
+{
+    for (int i = 0; i < UI_BTN_COUNT; i++) {
+        if (!ui_button_present(i)) continue;
+        ui_rect_t r;
+        ui_button_rect(i, gfx_w(), gfx_h(), &r);
+        const char *label = "";
+        uint16_t bg = COL_BTN;
+        switch (i) {
+        case UI_BTN_HOME:
+            /* src: original drawFooter(): lit only while the view is
+             * somewhere the device is not. */
+            label = s_panning ? "recentre" : "centred";
+            bg = s_panning ? COL_BTN_LIT : COL_BTN;
+            break;
+        case UI_BTN_SET:   label = "settings";   break;
+        case UI_BTN_SLEEP: label = "screen off"; break;
+        default: break;
+        }
+        box(r.x, r.y, r.w, r.h, bg, COL_BTN_EDGE);
+        text_centred(r.x + r.w / 2, r.y + r.h / 2, label, r.w - 12, COL_STATUS_FG);
+    }
+}
+
+/* One row's text, as the original's setRowText(): a name, the answer as a
+ * chip, and a line saying what the answer means. */
+static void row_text(int i, char *name, char *value, char *note, uint16_t *chip)
+{
+    switch (i) {
+    case UI_SET_THEME:
+        snprintf(name, 40, "palette");
+        snprintf(value, 40, "%s", s_theme == UI_THEME_DAY ? "day"
+                                : s_theme == UI_THEME_NIGHT ? "night" : "auto");
+        if (s_theme == UI_THEME_AUTO) {
+            snprintf(note, 80, "following the sun - %s right now", s_sun_dark ? "night" : "day");
+            *chip = COL_CHIP_AUTO;
+        } else {
+            snprintf(note, 80, "held %s until you change it",
+                     s_theme == UI_THEME_DAY ? "light" : "dark");
+            *chip = COL_CHIP_SET;
+        }
+        break;
+    case UI_SET_BRIGHT:
+        snprintf(name, 40, "brightness");
+        snprintf(value, 40, "%s", s_bright == UI_BRIGHT_AUTO ? "auto"
+                                : s_bright == UI_BRIGHT_LOW ? "low"
+                                : s_bright == UI_BRIGHT_MED ? "medium" : "high");
+        snprintf(note, 80, "backlight at %d%%%s", s_backlight < 0 ? BACKLIGHT_PCT : s_backlight,
+                 s_bright == UI_BRIGHT_AUTO ? ", set by the sun" : "");
+        *chip = s_bright == UI_BRIGHT_AUTO ? COL_CHIP_AUTO : COL_CHIP_SET;
+        break;
+    case UI_SET_WIFI: {
+        char ssid[33];
+        const bool joined = wifi_sta_ssid(ssid, sizeof(ssid));
+        snprintf(name, 40, "wifi network");
+        if (s_setup != SETUP_NONE) {
+            snprintf(value, 40, "setting up");
+            snprintf(note, 80, "the box below says what to do");
+            *chip = COL_CHIP_SET;
+        } else if (joined) {
+            snprintf(value, 40, "%.32s", ssid);
+            snprintf(note, 80, "tap to join a different network");
+            *chip = COL_CHIP_NET;
+        } else {
+            snprintf(value, 40, "offline");
+            snprintf(note, 80, "tap to open the setup portal");
+            *chip = COL_BTN;
+        }
+        break;
+    }
+    default:
+        name[0] = value[0] = note[0] = '\0';
+        *chip = COL_BTN;
+        break;
+    }
+}
+
+static void draw_panel(void)
+{
+    if (!s_panel) return;
+    ui_rect_t p;
+    ui_panel_rect(gfx_w(), gfx_h(), &p);
+    box(p.x, p.y, p.w, p.h, COL_PANEL_BG, COL_BTN_EDGE);
+    gfx_draw_text(p.x + 18, p.y + 18, "settings", TEXT_SCALE, 200, COL_STATUS_FG);
+    gfx_draw_text(p.x + 150, p.y + 20, "tap a row to change it", TEXT_SCALE, p.w - 170, COL_DIM);
+    /* Statics: three strings a row are past CLAUDE.md's few hundred. */
+    static char n[40], v[40], t[80];
+    for (int i = 0; i < UI_SET_COUNT; i++) {
+        const int ry = p.y + UI_SP_HEAD_H + i * UI_SP_ROW_H;
+        uint16_t chip;
+        row_text(i, n, v, t, &chip);
+        gfx_fill_rect(p.x + 14, ry, p.w - 28, UI_SP_ROW_H - 8, COL_ROW_BG);
+        int cw = gfx_text_w(v, TEXT_SCALE) + 28;
+        if (cw < 90) cw = 90;
+        const int cx = p.x + p.w - 24 - cw;
+        gfx_draw_text(p.x + 30, ry + 6, n, TEXT_SCALE, cx - p.x - 40, COL_STATUS_FG);
+        gfx_draw_text(p.x + 30, ry + 30, t, TEXT_SCALE, cx - p.x - 40, COL_NOTE);
+        gfx_fill_rect(cx, ry + 8, cw, UI_SP_ROW_H - 24, chip);
+        text_centred(cx + cw / 2, ry + 8 + (UI_SP_ROW_H - 24) / 2, v, cw - 8, COL_STATUS_FG);
+    }
+    box(p.x + 14, p.y + p.h - 56, 150, 44, COL_BTN, COL_BTN_EDGE);
+    text_centred(p.x + 89, p.y + p.h - 34, "close", 140, COL_STATUS_FG);
+}
+
 static void draw(const gnss_fix_t *fix)
 {
+    if (s_screen_off) return;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     mapview_compose(&s_view, gfx_fb(), gfx_w(), gfx_h(), gfx_w());
     const int pending = mapview_pending(&s_view);
+    const double vx = s_view.fx, vy = s_view.fy;
     xSemaphoreGive(s_lock);
-    /* The marker is at the window's centre: mapview centres on the
-     * position. No marker without a fix -- a remembered or seeded
-     * position is a claim, not a placeholder (original/mapengine.cpp). */
-    if (gnss_coarse(fix)) {
-        const int cx = gfx_w() / 2, cy = gfx_h() / 2;
-        gfx_fill_circle(cx, cy, MARKER_R + 3, COL_RING);
-        gfx_fill_circle(cx, cy, MARKER_R, gnss_fine(fix) ? COL_FINE : COL_COARSE);
+    /* The marker is where the device is, which is the window's centre
+     * unless a pan has moved the view; off the screen it is not drawn.
+     * No marker without a fix -- a remembered or seeded position is a
+     * claim, not a placeholder (original/mapengine.cpp). */
+    if (gnss_coarse(fix) && s_mark_ok) {
+        const double ox = (s_mark_x - vx) * SUBTILE_PX, oy = (s_mark_y - vy) * SUBTILE_PX;
+        if (fabs(ox) < gfx_w() && fabs(oy) < gfx_h()) {
+            const int cx = gfx_w() / 2 + (int)lround(ox), cy = gfx_h() / 2 + (int)lround(oy);
+            gfx_fill_circle(cx, cy, MARKER_R + 3, COL_RING);
+            gfx_fill_circle(cx, cy, MARKER_R, gnss_fine(fix) ? COL_FINE : COL_COARSE);
+        }
     }
     draw_status(fix, pending);
+    draw_footer();
     draw_setup();
+    draw_panel();
     gfx_blit(0, gfx_h());
 }
 
@@ -517,22 +677,55 @@ static void net_start(void)
  * day / night at walking pace until it stopped treating it as such.
  * Without either, nothing changes.
  */
+/* The backlight: 0 with the screen off, else `pct`, set only when it
+ * changes. s_backlight -1 makes the next call set it whatever it is. */
+static void backlight(int pct)
+{
+    if (s_screen_off) pct = 0;
+    if (pct == s_backlight) return;
+    lcd_backlight_set(pct);
+    s_backlight = pct;
+}
+
+/* The overrides over what the sun says (0016): a held palette, and a
+ * fixed backlight at one of the three automatic levels -- the original's
+ * brightnessWanted(), which reused them rather than adding a scale. A
+ * fixed level overrides the palette's dimming too: forcing the night
+ * palette and asking for a bright screen is a coherent thing to want. */
+static void apply_light(bool sun_dark, int sun_pct)
+{
+    s_sun_dark = sun_dark;
+    const bool dark = s_theme == UI_THEME_DAY ? false
+                    : s_theme == UI_THEME_NIGHT ? true : sun_dark;
+    if (dark != s_want_dark) s_want_dark = dark;
+    const int pct = s_bright == UI_BRIGHT_LOW  ? BRIGHT_NIGHT_PCT
+                  : s_bright == UI_BRIGHT_MED  ? BRIGHT_DUSK_PCT
+                  : s_bright == UI_BRIGHT_HIGH ? BACKLIGHT_PCT
+                  : s_theme == UI_THEME_NIGHT  ? BRIGHT_NIGHT_PCT
+                  : s_theme == UI_THEME_DAY    ? BACKLIGHT_PCT
+                  : sun_pct;
+    backlight(pct);
+}
+
 static void daylight(const gnss_fix_t *fix)
 {
-    static bool have_pos;
+    static bool have_pos, have_sun;
     static double lat, lon;
-    static int last_pct = -1;
+    static bool sun_dark;
+    static int sun_pct = BACKLIGHT_PCT;
     if (gnss_coarse(fix)) {
         lat = fix->lat;
         lon = fix->lon;
         have_pos = true;
     }
-    if (!have_pos) return;
+    /* Without a position or a time the sun's answer is the last one, or
+     * day; the overrides still apply. */
+    if (!have_pos) { apply_light(sun_dark, sun_pct); return; }
 
     int y, m, d;
     double now;
     if (!(fix->status == 'A' && sun_from_nmea(fix->date, fix->utc, &y, &m, &d, &now))) {
-        if (!wifi_ntp_synced()) return;
+        if (!wifi_ntp_synced()) { apply_light(sun_dark, sun_pct); return; }
         const time_t t = time(NULL);
         struct tm tm;
         gmtime_r(&t, &tm);
@@ -545,7 +738,7 @@ static void daylight(const gnss_fix_t *fix)
     sun_day_t sd;
     sun_day(lat, lon, y, m, d, &sd);
     const bool dark = !sun_up(&sd, now);
-    if (dark != s_want_dark) {
+    if (!have_sun || dark != sun_dark) {
         if (sd.kind == SUN_CROSSES)
             ESP_LOGI(TAG, "sun: rise %02d:%02dZ set %02d:%02dZ at %.3f,%.3f; now %s",
                      (int)sd.rise_min / 60, (int)sd.rise_min % 60,
@@ -554,16 +747,14 @@ static void daylight(const gnss_fix_t *fix)
         else
             ESP_LOGI(TAG, "sun: %s all day at %.3f,%.3f",
                      sd.kind == SUN_ALWAYS_UP ? "up" : "down", lat, lon);
-        s_want_dark = dark;
+        sun_dark = dark;
+        have_sun = true;
     }
 
     const double near = sun_to_crossing(&sd, now);
-    const int pct = (near >= 0 && near < DUSK_HALF_MIN) ? BRIGHT_DUSK_PCT
-                  : dark ? BRIGHT_NIGHT_PCT : BACKLIGHT_PCT;
-    if (pct != last_pct) {
-        lcd_backlight_set(pct);
-        last_pct = pct;
-    }
+    sun_pct = (near >= 0 && near < DUSK_HALF_MIN) ? BRIGHT_DUSK_PCT
+            : dark ? BRIGHT_NIGHT_PCT : BACKLIGHT_PCT;
+    apply_light(sun_dark, sun_pct);
 }
 
 /* ---- setup ---- */
@@ -678,22 +869,162 @@ static void setup_step(void)
     }
 }
 
-/* A tap on the box closes the portal. Edge-triggered: one press is one
- * tap. */
-static void setup_touch(void)
+/* ---- pan, screen off, touch (0016) ---- */
+
+/* One step of a pan: a third of the map's width or height, the original's
+ * MARKER_BAND, which is also how far its follow band let the marker go. */
+static void pan_step(int dx, int dy)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (!s_view.grid.initialised) {
+        xSemaphoreGive(s_lock);
+        ESP_LOGI(TAG, "pan: nothing to pan yet");
+        return;
+    }
+    if (!s_panning) {
+        s_anchor_x = s_view.fx;
+        s_anchor_y = s_view.fy;
+        s_panning = true;
+    }
+    const double vis_h = ui_map_bottom(gfx_h()) - STATUS_H;
+    s_anchor_x += dx * (gfx_w() * MARKER_BAND) / SUBTILE_PX;
+    s_anchor_y += dy * (vis_h * MARKER_BAND) / SUBTILE_PX;
+    mapview_centre_tiles(&s_view, s_anchor_x, s_anchor_y);
+    xSemaphoreGive(s_lock);
+}
+
+/* Back to following the device: at once, rather than at the next fix,
+ * which at the idle rate can be seconds away (original map_pan_reset()).
+ * Without a fix the view stays where it is and stops being a pan. */
+static void pan_reset(void)
+{
+    if (!s_panning) return;
+    s_panning = false;
+    if (!s_mark_ok) return;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    mapview_centre_tiles(&s_view, s_mark_x, s_mark_y);
+    xSemaphoreGive(s_lock);
+}
+
+/*
+ * The original's screenOff(): the wake target drawn first, so where to
+ * press is not a secret, then the backlight to 0. A pan is dropped:
+ * waking to a map of somewhere the device is not, hours later, is the
+ * one way a pan can mislead. GNSS and the render task carry on, so the
+ * grid is drawn when the screen comes back; the original stopped
+ * rasterising instead, which saves power this does not.
+ */
+static void screen_off(void)
+{
+    const int W = gfx_w(), H = gfx_h();
+    gfx_fill_rect(0, 0, W, H, RGB(0, 0, 0));
+    box(W / 3, H / 3, W / 3, H / 3, RGB(0, 0, 0), COL_DIM);
+    text_centred(W / 2, H / 2, "touch here to wake", W / 3 - 20, COL_DIM);
+    gfx_blit(0, H);
+    /* src: original screenOff(): the target shown for 700 ms. */
+    vTaskDelay(pdMS_TO_TICKS(700));
+    pan_reset();
+    s_panel = false;
+    s_screen_off = true;
+    backlight(0);
+    gfx_fill_rect(0, 0, W, H, RGB(0, 0, 0));
+    gfx_blit(0, H);
+    ESP_LOGI(TAG, "screen: off (GNSS and tiles continue)");
+}
+
+static void screen_on(void)
+{
+    s_screen_off = false;
+    s_backlight = -1;       /* whatever the light now calls for */
+    s_dirty = true;
+    ESP_LOGI(TAG, "screen: on");
+}
+
+static void row_tap(int row)
+{
+    switch (row) {
+    case UI_SET_THEME:
+        s_theme = ui_theme_next(s_theme);
+        ESP_LOGI(TAG, "palette: %s", s_theme == UI_THEME_AUTO ? "auto"
+                                   : s_theme == UI_THEME_DAY ? "day" : "night");
+        break;
+    case UI_SET_BRIGHT:
+        s_bright = ui_bright_next(s_bright);
+        ESP_LOGI(TAG, "brightness: %d", (int)s_bright);
+        break;
+    case UI_SET_WIFI:
+        /* The portal, as at boot; the panel closes so the box shows. */
+        s_panel = false;
+        if (s_setup == SETUP_NONE) {
+            ESP_LOGI(TAG, "setup: asked for from settings");
+            setup_want(true);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+/*
+ * One tap, in the original's order: the wake zone alone while the screen
+ * is off; the panel, which takes every tap while it is open and closes on
+ * one outside it; the setup box; the pan squares; the buttons.
+ * Edge-triggered, one press one tap, and the press is swallowed after
+ * anything that changes what is under the finger (touch.h).
+ */
+static void ui_touch(void)
 {
     static bool was_down;
     int x, y;
     const bool down = touch_get(&x, &y);
     const bool tap = down && !was_down;
     was_down = down;
-    if (!tap || s_setup != SETUP_ACTIVE) return;
-    int bx, by, bw, bh;
-    setup_box_rect(&bx, &by, &bw, &bh);
-    if (x >= bx && x < bx + bw && y >= by && y < by + bh) {
-        ESP_LOGI(TAG, "setup: closed by touch");
-        portal_request_stop();
+    if (!tap) return;
+    const int W = gfx_w(), H = gfx_h();
+
+    if (s_screen_off) {
+        if (ui_wake_zone(x, y, W, H)) { screen_on(); touch_swallow(); }
+        return;
+    }
+    s_dirty = true;
+    if (s_panel) {
+        const int hit = ui_panel_at(x, y, W, H);
+        if (hit == UI_PANEL_OUTSIDE || hit == UI_PANEL_CLOSE) s_panel = false;
+        else if (hit >= 0) row_tap(hit);
         touch_swallow();
+        return;
+    }
+    if (s_setup == SETUP_ACTIVE) {
+        int bx, by, bw, bh;
+        setup_box_rect(&bx, &by, &bw, &bh);
+        if (x >= bx && x < bx + bw && y >= by && y < by + bh) {
+            ESP_LOGI(TAG, "setup: closed by touch");
+            portal_request_stop();
+            touch_swallow();
+            return;
+        }
+    }
+    int dx, dy;
+    if (ui_pan_cell(x, y, W, H, STATUS_H, &dx, &dy)) {
+        if (dx || dy) pan_step(dx, dy);
+        return;
+    }
+    switch (ui_button_at(x, y, W, H)) {
+    case UI_BTN_HOME:
+        /* Harmless when already following, and deliberately still live:
+         * it is what you press when unsure (original handleTouch()). */
+        pan_reset();
+        break;
+    case UI_BTN_SET:
+        s_panel = true;
+        touch_swallow();
+        break;
+    case UI_BTN_SLEEP:
+        screen_off();
+        touch_swallow();
+        break;
+    default:
+        break;
     }
 }
 
@@ -715,6 +1046,7 @@ void app_main(void)
     gfx_set_rotation(VIEW_ROTATION);
     draw_message("Aimless Moving Map", "looking for maps");
     ESP_ERROR_CHECK(lcd_backlight_set(BACKLIGHT_PCT));
+    s_backlight = BACKLIGHT_PCT;
     /* After the panel: the controller's reset is released with the
      * panel's (touch.h). Without touch the map runs; only setup by touch
      * is lost. */
@@ -821,15 +1153,23 @@ void app_main(void)
                 ESP_LOGI(TAG, "first fix after %u ms", (unsigned)gnss_first_coarse_ms());
                 had_fix = true;
             }
-            xSemaphoreTake(s_lock, portMAX_DELAY);
-            mapview_centre(&s_view, fix.lat, fix.lon);
-            xSemaphoreGive(s_lock);
+            const merc_pt_t p = merc_from_ll(fix.lat, fix.lon, VIEW_ZOOM);
+            s_mark_x = p.x;
+            s_mark_y = p.y;
+            s_mark_ok = true;
+            /* While panned the view stays where the pan put it; the
+             * marker moves on its own (original/README.md). */
+            if (!s_panning) {
+                xSemaphoreTake(s_lock, portMAX_DELAY);
+                mapview_centre_tiles(&s_view, p.x, p.y);
+                xSemaphoreGive(s_lock);
+            }
         }
         /* Today's date, for finding a daily build without SNTP. */
         if (fix.status == 'A') netremote_set_today(bd_from_ddmmyy(fix.date));
 
         setup_step();
-        setup_touch();
+        ui_touch();
 
         const int64_t now = esp_timer_get_time();
         if (s_dirty || now - last_draw >= 1000000) {

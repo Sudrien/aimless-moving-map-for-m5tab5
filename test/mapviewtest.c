@@ -133,6 +133,15 @@ int main(int argc, char **argv)
         CHECK(fb[(H / 2) * W + W / 2] == want, "centre pixel is not the position's");
     }
 
+    /* The same place given in tiles (0016's pan) is the same view. */
+    {
+        const merc_pt_t p = merc_from_ll(lat - 0.002, lon + 0.003, Z);
+        const tile_id_t was = v.grid.origin;
+        mapview_centre_tiles(&v, p.x, p.y);
+        CHECK(mapview_pending(&v) == 0 && v.grid.origin.x == was.x && v.grid.origin.y == was.y &&
+              v.fx == p.x && v.fy == p.y, "centre in tiles moved the grid");
+    }
+
     /* A small move inside the grid's half-tile: nothing new to render. */
     mapview_centre(&v, lat - 0.0021, lon + 0.0031);
     CHECK(mapview_pending(&v) == 0, "small move queued %d", mapview_pending(&v));
