@@ -7,7 +7,7 @@
 
 bool ui_button_present(int i)
 {
-    return i == UI_BTN_HOME || i == UI_BTN_SET || i == UI_BTN_SLEEP;
+    return i == UI_BTN_HOME || i == UI_BTN_PINS || i == UI_BTN_SET || i == UI_BTN_SLEEP;
 }
 
 void ui_button_rect(int i, int sw, int sh, ui_rect_t *r)
@@ -80,4 +80,45 @@ int ui_panel_at(int px, int py, int sw, int sh)
     if (py < r.y + UI_SP_HEAD_H) return UI_PANEL_NOTHING;
     const int row = (py - (r.y + UI_SP_HEAD_H)) / UI_SP_ROW_H;
     return row < UI_SET_COUNT ? row : UI_PANEL_NOTHING;
+}
+
+void ui_pins_rect(int sw, int sh, ui_rect_t *r)
+{
+    r->w = sw * 2 / 3;
+    r->h = sh * 2 / 3;
+    r->x = (sw - r->w) / 2;
+    r->y = (sh - r->h) / 2;
+}
+
+int ui_pins_rows(int sw, int sh)
+{
+    ui_rect_t r;
+    ui_pins_rect(sw, sh, &r);
+    const int rows = (r.h - UI_PP_HEAD_H - UI_PP_FOOT_H) / UI_PP_ROW_H;
+    return rows < 1 ? 1 : rows;
+}
+
+ui_pins_hit_t ui_pins_at(int px, int py, int sw, int sh, int *row)
+{
+    ui_rect_t r;
+    ui_pins_rect(sw, sh, &r);
+    *row = -1;
+    /* A tap anywhere outside closes it: requiring the close button would
+     * trap anyone who did not find it, over a map they cannot see. */
+    if (px < r.x || px >= r.x + r.w || py < r.y || py >= r.y + r.h) return UI_PINS_OUTSIDE;
+    /* src: original pinPanelTouch()'s regions, in its order. */
+    if (py < r.y + UI_PP_HEAD_H - 10)
+        return px > r.x + r.w - 200 ? UI_PINS_SAVE : UI_PINS_NOTHING;
+    if (py > r.y + r.h - UI_PP_FOOT_H) {
+        if (px < r.x + 170) return UI_PINS_CLOSE;
+        if (px < r.x + 400) return UI_PINS_STOP;
+        if (px > r.x + r.w - 154 && px < r.x + r.w - 86) return UI_PINS_UP;
+        if (px > r.x + r.w - 86) return UI_PINS_DOWN;
+        return UI_PINS_NOTHING;
+    }
+    if (py < r.y + UI_PP_HEAD_H) return UI_PINS_NOTHING;
+    const int k = (py - (r.y + UI_PP_HEAD_H)) / UI_PP_ROW_H;
+    if (k < 0 || k >= ui_pins_rows(sw, sh)) return UI_PINS_NOTHING;
+    *row = k;
+    return px > r.x + r.w - 84 ? UI_PINS_DELETE : UI_PINS_PICK;
 }

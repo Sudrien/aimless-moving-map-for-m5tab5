@@ -462,3 +462,40 @@ Host: uirowtest (73 checks) and one more in mapviewtest. Device:
 aimless.c compiled -fsyntax-only as before, not built. On the board:
 "pan: ...", "palette: auto|day|night", "brightness: N", "screen:
 off|on", "setup: asked for from settings".
+
+### 0017 -- saved points
+
+The original's waypoints: up to 32 points, one target, and the
+straight-line distance and bearing to it -- not routing, for its
+reason: the archive is drawing geometry cut at tile edges, with no road
+network to route on.
+
+**waypoints.c** is original/waypoints.cpp as C with no file or clock in
+it, host-tested (waypointstest): the list, the target kept on its point
+through a removal, haversine distance and initial bearing, "name: 1.4 km
+NE" with "here" under 30 m, and the file. **The file is the original's
+/waypoints.bin byte for byte** -- "WPT1", version 1, a count, 48-byte
+records -- checked against the original's own structs compiled on the
+host, so points saved under the original are read here and the other
+way round. A short file keeps its whole records; a bad header is an
+empty list.
+
+**On the card** it is written whole to waypoints.tmp and renamed over
+waypoints.bin, where the original wrote in place: a cut mid-write then
+leaves the old list. A name not given is the UTC time ("14:13") from the
+fix or SNTP, or "pin N", as there (the original's was local time with
+no zone set, which is UTC).
+
+**On screen**, as the original's: the row's second slot ("points (N)",
+or "to NAME" lit while guiding); a panel with save here, the list with
+distance and bearing, delete, stop guiding, and up/down past a page; a
+teardrop per point haloed in the palette's opposite, the target orange
+and ringed; and a GUIDE_R arrow from the marker toward the target,
+nothing when within 12 px. The target's line leads the status bar,
+which is longer than the screen. Not kept: the original's edge arrows
+for points off the screen.
+
+Host: waypointstest (33 checks), uirowtest's panel checks (20).
+Device: aimless.c compiled -fsyntax-only as before; not built. On the
+board: "saved points: N" at boot, "added", "removed", "guiding to",
+"wrote N".

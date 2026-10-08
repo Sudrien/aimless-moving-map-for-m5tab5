@@ -19,8 +19,9 @@
  *   setup         M5Launcher's saved networks imported (launcher_import.h),
  *                 or the setup portal (portal.h): with nothing saved, or
  *                 with a touch in the first two seconds, as the original
- *   this loop     follow the fix (or a pan), draw, the button row and the
- *                 settings panel, the setup box over the map, touch
+ *   this loop     follow the fix (or a pan), draw, the button row, the
+ *                 settings and saved points panels, the setup box over
+ *                 the map, saved points and the guide to one, touch
  *
  * What the original did that this does not yet: labels, place names,
  * zoom levels other than z14, the compass, waypoints, Wi-Fi location,
@@ -73,6 +74,7 @@
 #include "portal.h"
 #include "tilesrc.h"
 #include "uirow.h"
+#include "waypoints.h"
 #include "mercator.h"
 
 static const char *TAG = "aimless";
@@ -179,6 +181,11 @@ static double      s_anchor_x, s_anchor_y;
 static bool        s_mark_ok;       /* a measured position, to draw */
 static double      s_mark_x, s_mark_y;
 
+/* Saved points (0017): the list, the panel and its page. */
+static wp_list_t   s_wp;
+static bool        s_pins;          /* the panel is open */
+static int         s_pins_scroll;
+
 /*
  * Wi-Fi setup, as this loop moves through it. Read by the network's
  * hooks from its own task, so a single word.
@@ -251,9 +258,13 @@ static tile_state_t src_draw(void *ctx, tile_id_t id, uint16_t *px, int split)
 
 static void draw_status(const gnss_fix_t *fix, int pending)
 {
-    char line[160];
+    /* With a target, where it is goes first: the rest of the line is
+     * longer than the screen and is cut at the right (0017). */
+    char nav[64] = "", line[224];
+    if (gnss_coarse(fix)) wp_target_text(&s_wp, fix->lat, fix->lon, nav, sizeof(nav));
     if (gnss_coarse(fix)) {
-        snprintf(line, sizeof(line), "%.5f %c  %.5f %c   z%d   %d sats   HDOP %.1f   %.0f km/h   %.6sZ   %s%s",
+        snprintf(line, sizeof(line), "%s%s%.5f %c  %.5f %c   z%d   %d sats   HDOP %.1f   %.0f km/h   %.6sZ   %s%s",
+                 nav, nav[0] ? "   " : "",
                  fabs(fix->lat), fix->lat < 0 ? 'S' : 'N',
                  fabs(fix->lon), fix->lon < 0 ? 'W' : 'E',
                  VIEW_ZOOM, fix->sats, fix->hdop, fix->speed_kmh, fix->utc,
@@ -361,6 +372,60 @@ static void draw_setup(void)
     if (c[0]) gfx_draw_text(tx, y + SETUP_PAD + 2 * SETUP_LINE, c, TEXT_SCALE, tw, COL_WAIT);
 }
 
+/* ---- saved points (0017) ---- */
+
+/* src: original/waypoints.cpp WP_PATH, at the card's root. */
+#define WP_PATH     STORAGE_SD_MOUNT "/waypoints.bin"
+#define WP_TMP      STORAGE_SD_MOUNT "/waypoints.tmp"
+
+static uint8_t s_wp_file[WP_FILE_MAX];
+
+static void wp_read(void)
+{
+    wp_init(&s_wp);
+    FILE *f = fopen(WP_PATH, "rb");
+    if (!f) return;
+    const size_t n = fread(s_wp_file, 1, sizeof(s_wp_file), f);
+    fclose(f);
+    ESP_LOGI(TAG, "saved points: %d", wp_load(&s_wp, s_wp_file, n));
+}
+
+/* Written whole, to a second file renamed over the first, so a power cut
+ * mid-write leaves the old list rather than half a new one. FatFs will
+ * not rename over a file, so the old one goes first; a cut between the
+ * two leaves the new list in waypoints.tmp, which is not lost, only not
+ * read. */
+static void wp_write(void)
+{
+    const size_t n = wp_save(&s_wp, s_wp_file, sizeof(s_wp_file));
+    FILE *f = fopen(WP_TMP, "wb");
+    if (!f) { ESP_LOGW(TAG, "saved points: cannot write the card"); return; }
+    const bool ok = fwrite(s_wp_file, 1, n, f) == n;
+    if (fclose(f) != 0 || !ok) { ESP_LOGW(TAG, "saved points: write failed"); return; }
+    remove(WP_PATH);
+    if (rename(WP_TMP, WP_PATH) != 0) ESP_LOGW(TAG, "saved points: rename failed");
+    else ESP_LOGI(TAG, "saved points: wrote %d", s_wp.n);
+}
+
+/* Seconds since 1970 from RMC's date and time, or the clock, for the
+ * name a point gets; 0 when neither is known. src: the days-from-civil
+ * algorithm, Howard Hinnant, "chrono-Compatible Low-Level Date
+ * Algorithms". */
+static int64_t utc_now(const gnss_fix_t *fix)
+{
+    int y, m, d;
+    double min;
+    if (fix->status == 'A' && sun_from_nmea(fix->date, fix->utc, &y, &m, &d, &min)) {
+        y -= m <= 2;
+        const int64_t era = (y >= 0 ? y : y - 399) / 400;
+        const int64_t yoe = y - era * 400;
+        const int64_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+        const int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        return (era * 146097 + doe - 719468) * 86400 + (int64_t)(min * 60.0);
+    }
+    return wifi_ntp_synced() ? (int64_t)time(NULL) : 0;
+}
+
 /* ---- the button row and the settings panel (0016) ---- */
 
 /* src: original/tab5_map.cpp drawFooter() and setRowText()'s colours. */
@@ -406,6 +471,18 @@ static void draw_footer(void)
             label = s_panning ? "recentre" : "centred";
             bg = s_panning ? COL_BTN_LIT : COL_BTN;
             break;
+        case UI_BTN_PINS: {
+            /* src: original drawFooter(): the button names the target
+             * while guiding, so the one control that ends guidance also
+             * says it is on. */
+            static char pl[40];
+            const int t = wp_target(&s_wp);
+            if (t >= 0) snprintf(pl, sizeof(pl), "to %s", s_wp.p[t].name);
+            else snprintf(pl, sizeof(pl), "points (%d)", s_wp.n);
+            label = pl;
+            bg = t >= 0 ? COL_BTN_LIT : COL_BTN;
+            break;
+        }
         case UI_BTN_SET:   label = "settings";   break;
         case UI_BTN_SLEEP: label = "screen off"; break;
         default: break;
@@ -495,6 +572,153 @@ static void draw_panel(void)
     text_centred(p.x + 89, p.y + p.h - 34, "close", 140, COL_STATUS_FG);
 }
 
+/* src: original drawPinPanel()'s and draw_pins()' colours. */
+#define COL_SAVE        RGB(40, 110, 60)
+#define COL_ROW_TARGET  RGB(110, 45, 25)
+#define COL_DEL         RGB(235, 120, 120)
+#define COL_PIN         RGB(200, 40, 140)
+#define COL_PIN_TARGET  RGB(230, 80, 40)
+
+static void draw_pins_panel(const gnss_fix_t *fix)
+{
+    if (!s_pins) return;
+    ui_rect_t p;
+    ui_pins_rect(gfx_w(), gfx_h(), &p);
+    const int rows = ui_pins_rows(gfx_w(), gfx_h());
+    const bool can_save = gnss_coarse(fix) && s_wp.n < WP_MAX;
+    const int target = wp_target(&s_wp);
+    box(p.x, p.y, p.w, p.h, COL_PANEL_BG, COL_BTN_EDGE);
+    gfx_draw_text(p.x + 18, p.y + 18, "saved points", TEXT_SCALE, 300, COL_STATUS_FG);
+    gfx_fill_rect(p.x + p.w - 200, p.y + 12, 186, 44, can_save ? COL_SAVE : COL_BTN);
+    text_centred(p.x + p.w - 107, p.y + 34,
+                 !gnss_coarse(fix) ? "no fix" : s_wp.n >= WP_MAX ? "list full" : "save here",
+                 180, can_save ? COL_STATUS_FG : COL_NOTE);
+
+    static char line[96];
+    for (int r = 0; r < rows; r++) {
+        const int i = s_pins_scroll + r;
+        if (i >= s_wp.n) break;
+        const wp_point_t *w = &s_wp.p[i];
+        const int ry = p.y + UI_PP_HEAD_H + r * UI_PP_ROW_H;
+        gfx_fill_rect(p.x + 14, ry, p.w - 28, UI_PP_ROW_H - 8, i == target ? COL_ROW_TARGET : COL_ROW_BG);
+        if (gnss_coarse(fix)) {
+            const double m = wp_distance_m(fix->lat, fix->lon, w->lat, w->lon);
+            const int b = (int)wp_bearing_deg(fix->lat, fix->lon, w->lat, w->lon);
+            if (m < 1000.0) snprintf(line, sizeof(line), "%s   %d m   %03d deg", w->name, (int)m, b);
+            else snprintf(line, sizeof(line), "%s   %.1f km   %03d deg", w->name, m / 1000.0, b);
+        } else {
+            snprintf(line, sizeof(line), "%s   %.5f %.5f", w->name, w->lat, w->lon);
+        }
+        const int cy = ry + (UI_PP_ROW_H - 8) / 2;
+        gfx_draw_text(p.x + 30, cy - GFX_GLYPH_H(TEXT_SCALE) / 2, line, TEXT_SCALE, p.w - 150, COL_STATUS_FG);
+        text_centred(p.x + p.w - 50, cy, "del", 60, COL_DEL);
+    }
+    if (s_wp.n == 0)
+        text_centred(p.x + p.w / 2, p.y + p.h / 2, "none yet - save here drops one", p.w - 40, COL_NOTE);
+
+    box(p.x + 14, p.y + p.h - 56, 150, 44, COL_BTN, COL_BTN_EDGE);
+    text_centred(p.x + 89, p.y + p.h - 34, "close", 140, COL_STATUS_FG);
+    if (target >= 0) {
+        box(p.x + 178, p.y + p.h - 56, 210, 44, COL_ROW_TARGET, COL_BTN_EDGE);
+        text_centred(p.x + 283, p.y + p.h - 34, "stop guiding", 200, COL_STATUS_FG);
+    }
+    if (s_wp.n > rows) {
+        box(p.x + p.w - 154, p.y + p.h - 56, 64, 44, COL_BTN, COL_BTN_EDGE);
+        text_centred(p.x + p.w - 122, p.y + p.h - 34, "up", 60, COL_STATUS_FG);
+        box(p.x + p.w - 80, p.y + p.h - 56, 64, 44, COL_BTN, COL_BTN_EDGE);
+        text_centred(p.x + p.w - 48, p.y + p.h - 34, "down", 60, COL_STATUS_FG);
+    }
+}
+
+/* A thick line, as a quadrilateral: gfx has no line. */
+static void thick_line(double x0, double y0, double x1, double y1, double half, uint16_t c)
+{
+    double dx = x1 - x0, dy = y1 - y0;
+    const double len = sqrt(dx * dx + dy * dy);
+    if (len < 0.5) return;
+    const double px = -dy / len * half, py = dx / len * half;
+    const int xy[8] = { (int)lround(x0 + px), (int)lround(y0 + py), (int)lround(x1 + px), (int)lround(y1 + py),
+                        (int)lround(x1 - px), (int)lround(y1 - py), (int)lround(x0 - px), (int)lround(y0 - py) };
+    gfx_fill_poly(xy, 4, c);
+}
+
+/* Where a world point is in the window, which is centred on the view. */
+static void to_screen(double vx, double vy, double lat, double lon, double *sx, double *sy)
+{
+    const merc_pt_t p = merc_from_ll(lat, lon, VIEW_ZOOM);
+    *sx = gfx_w() / 2 + (p.x - vx) * SUBTILE_PX;
+    *sy = gfx_h() / 2 + (p.y - vy) * SUBTILE_PX;
+}
+
+/*
+ * The points on the map, as the original's draw_pins(): a teardrop whose
+ * tip is the position (a circle centred there would sit half a diameter
+ * off), haloed in the palette's opposite so it separates from water,
+ * park and building fills alike, and the name above it. The target is
+ * orange and ringed. Under the marker: the position dot is the one
+ * thing that must always be findable.
+ */
+static void draw_pins_on_map(double vx, double vy)
+{
+    const int top = STATUS_H, bot = ui_map_bottom(gfx_h());
+    const uint16_t halo = s_dark ? RGB(0, 0, 0) : RGB(255, 255, 255);
+    const int target = wp_target(&s_wp);
+    for (int i = 0; i < s_wp.n; i++) {
+        double fx, fy;
+        to_screen(vx, vy, s_wp.p[i].lat, s_wp.p[i].lon, &fx, &fy);
+        const int sx = (int)lround(fx), sy = (int)lround(fy);
+        /* The map band only: not under the status bar or the row. */
+        if (sx < -60 || sx > gfx_w() + 60 || sy < top + 50 || sy > bot) continue;
+        const uint16_t ink = i == target ? COL_PIN_TARGET : COL_PIN;
+        gfx_fill_rect(sx - 1, sy - 16, 3, 17, halo);
+        if (i == target) gfx_fill_circle(sx, sy - 22, 13, ink);
+        gfx_fill_circle(sx, sy - 22, 10, halo);
+        gfx_fill_circle(sx, sy - 22, 8, ink);
+        gfx_fill_circle(sx, sy, 2, ink);
+        const int tw = gfx_text_w(s_wp.p[i].name, TEXT_SCALE);
+        const int ty = sy - 42 - GFX_GLYPH_H(TEXT_SCALE) / 2;
+        for (int dy = -2; dy <= 2; dy += 2)
+            for (int dx = -2; dx <= 2; dx += 2)
+                if (dx || dy)
+                    gfx_draw_text(sx - tw / 2 + dx, ty + dy, s_wp.p[i].name, TEXT_SCALE, tw + 4, halo);
+        gfx_draw_text(sx - tw / 2, ty, s_wp.p[i].name, TEXT_SCALE, tw + 4, ink);
+    }
+}
+
+/*
+ * A fixed-length arrow from the marker toward the target, as the
+ * original's draw_target_guide(): GUIDE_R long, haloed, starting clear of
+ * the marker's ring. Nothing when standing on it -- a bearing from a metre
+ * of receiver noise spins, and a spinning arrow reads as a fault.
+ */
+static void draw_guide(double vx, double vy, int mx, int my)
+{
+    const int t = wp_target(&s_wp);
+    if (t < 0) return;
+    double tx, ty;
+    to_screen(vx, vy, s_wp.p[t].lat, s_wp.p[t].lon, &tx, &ty);
+    double dx = tx - mx, dy = ty - my;
+    const double len = sqrt(dx * dx + dy * dy);
+    if (len < 12.0) return;
+    dx /= len;
+    dy /= len;
+    const uint16_t halo = s_dark ? RGB(0, 0, 0) : RGB(255, 255, 255);
+    const double x0 = mx + dx * 16, y0 = my + dy * 16;
+    const double x1 = mx + dx * (GUIDE_R - 16), y1 = my + dy * (GUIDE_R - 16);
+    const double hx = mx + dx * GUIDE_R, hy = my + dy * GUIDE_R;
+    const double px = -dy, py = dx;
+    const int head_halo[6] = { (int)lround(hx + dx * 3), (int)lround(hy + dy * 3),
+                               (int)lround(x1 + px * 13), (int)lround(y1 + py * 13),
+                               (int)lround(x1 - px * 13), (int)lround(y1 - py * 13) };
+    const int head[6] = { (int)lround(hx), (int)lround(hy),
+                          (int)lround(x1 + px * 10), (int)lround(y1 + py * 10),
+                          (int)lround(x1 - px * 10), (int)lround(y1 - py * 10) };
+    thick_line(x0, y0, x1, y1, 3.0, halo);
+    gfx_fill_poly(head_halo, 3, halo);
+    thick_line(x0, y0, x1, y1, 1.5, COL_PIN_TARGET);
+    gfx_fill_poly(head, 3, COL_PIN_TARGET);
+}
+
 static void draw(const gnss_fix_t *fix)
 {
     if (s_screen_off) return;
@@ -507,10 +731,12 @@ static void draw(const gnss_fix_t *fix)
      * unless a pan has moved the view; off the screen it is not drawn.
      * No marker without a fix -- a remembered or seeded position is a
      * claim, not a placeholder (original/mapengine.cpp). */
+    draw_pins_on_map(vx, vy);
     if (gnss_coarse(fix) && s_mark_ok) {
         const double ox = (s_mark_x - vx) * SUBTILE_PX, oy = (s_mark_y - vy) * SUBTILE_PX;
         if (fabs(ox) < gfx_w() && fabs(oy) < gfx_h()) {
             const int cx = gfx_w() / 2 + (int)lround(ox), cy = gfx_h() / 2 + (int)lround(oy);
+            draw_guide(vx, vy, cx, cy);
             gfx_fill_circle(cx, cy, MARKER_R + 3, COL_RING);
             gfx_fill_circle(cx, cy, MARKER_R, gnss_fine(fix) ? COL_FINE : COL_COARSE);
         }
@@ -519,6 +745,7 @@ static void draw(const gnss_fix_t *fix)
     draw_footer();
     draw_setup();
     draw_panel();
+    draw_pins_panel(fix);
     gfx_blit(0, gfx_h());
 }
 
@@ -925,6 +1152,7 @@ static void screen_off(void)
     vTaskDelay(pdMS_TO_TICKS(700));
     pan_reset();
     s_panel = false;
+    s_pins = false;
     s_screen_off = true;
     backlight(0);
     gfx_fill_rect(0, 0, W, H, RGB(0, 0, 0));
@@ -972,7 +1200,66 @@ static void row_tap(int row)
  * Edge-triggered, one press one tap, and the press is swallowed after
  * anything that changes what is under the finger (touch.h).
  */
-static void ui_touch(void)
+/* A tap on the saved points panel, as the original's pinPanelTouch(). */
+static void pins_tap(int x, int y, const gnss_fix_t *fix)
+{
+    int row;
+    const int rows = ui_pins_rows(gfx_w(), gfx_h());
+    switch (ui_pins_at(x, y, gfx_w(), gfx_h(), &row)) {
+    case UI_PINS_OUTSIDE:
+    case UI_PINS_CLOSE:
+        s_pins = false;
+        break;
+    case UI_PINS_SAVE:
+        /* src: original wp_add_fix(): no fix, no point -- saving 0,0
+         * because the receiver had not locked is the one failure that
+         * looks like success. */
+        if (!gnss_coarse(fix)) break;
+        if (wp_add(&s_wp, fix->lat, fix->lon, NULL, utc_now(fix)) >= 0) {
+            ESP_LOGI(TAG, "saved points: added %s at %.5f,%.5f",
+                     s_wp.p[s_wp.n - 1].name, fix->lat, fix->lon);
+            wp_write();
+        }
+        break;
+    case UI_PINS_STOP:
+        if (wp_target(&s_wp) >= 0) {
+            wp_set_target(&s_wp, -1);
+            ESP_LOGI(TAG, "saved points: guidance off");
+        }
+        break;
+    case UI_PINS_UP:
+        if (s_pins_scroll > 0) s_pins_scroll--;
+        break;
+    case UI_PINS_DOWN:
+        if (s_pins_scroll + rows < s_wp.n) s_pins_scroll++;
+        break;
+    case UI_PINS_PICK: {
+        const int i = s_pins_scroll + row;
+        if (i >= s_wp.n) break;
+        /* Tapping the target again stops guiding: the row is its own
+         * toggle. */
+        wp_set_target(&s_wp, i == wp_target(&s_wp) ? -1 : i);
+        ESP_LOGI(TAG, "saved points: %s%s", wp_target(&s_wp) >= 0 ? "guiding to " : "guidance off",
+                 wp_target(&s_wp) >= 0 ? s_wp.p[i].name : "");
+        s_pins = false;
+        break;
+    }
+    case UI_PINS_DELETE: {
+        const int i = s_pins_scroll + row;
+        if (i >= s_wp.n) break;
+        ESP_LOGI(TAG, "saved points: removed %s", s_wp.p[i].name);
+        wp_remove(&s_wp, i);
+        wp_write();
+        /* The list got shorter under the page. */
+        while (s_pins_scroll > 0 && s_pins_scroll + rows > s_wp.n) s_pins_scroll--;
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+static void ui_touch(const gnss_fix_t *fix)
 {
     static bool was_down;
     int x, y;
@@ -987,6 +1274,11 @@ static void ui_touch(void)
         return;
     }
     s_dirty = true;
+    if (s_pins) {
+        pins_tap(x, y, fix);
+        touch_swallow();
+        return;
+    }
     if (s_panel) {
         const int hit = ui_panel_at(x, y, W, H);
         if (hit == UI_PANEL_OUTSIDE || hit == UI_PANEL_CLOSE) s_panel = false;
@@ -1014,6 +1306,11 @@ static void ui_touch(void)
         /* Harmless when already following, and deliberately still live:
          * it is what you press when unsure (original handleTouch()). */
         pan_reset();
+        break;
+    case UI_BTN_PINS:
+        s_pins = true;
+        s_pins_scroll = 0;
+        touch_swallow();
         break;
     case UI_BTN_SET:
         s_panel = true;
@@ -1065,6 +1362,7 @@ void app_main(void)
         .powered        = usbhost_powered,
     };
     ESP_ERROR_CHECK(storage_init(&usb));
+    wp_read();
     portal_init();
     net_start();
     usbhost_start();
@@ -1169,7 +1467,7 @@ void app_main(void)
         if (fix.status == 'A') netremote_set_today(bd_from_ddmmyy(fix.date));
 
         setup_step();
-        ui_touch();
+        ui_touch(&fix);
 
         const int64_t now = esp_timer_get_time();
         if (s_dirty || now - last_draw >= 1000000) {

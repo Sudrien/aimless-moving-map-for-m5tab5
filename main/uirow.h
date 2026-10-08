@@ -8,13 +8,12 @@
  * screen is passed in (sw x sh, landscape) rather than read from the
  * panel.
  *
- * FIVE SLOTS, THREE BUTTONS. The original's row is home, saved points,
+ * FIVE SLOTS, FOUR BUTTONS. The original's row is home, saved points,
  * area cache, settings and screen off, in that order -- by how often
  * each is reached for while moving, with screen off last because it is
- * the one press that is annoying to make by accident. Saved points and
- * the area cache are features this program does not have yet, so their
- * slots stay empty rather than the row closing up: the three that are
- * here are where they will stay when the other two arrive.
+ * the one press that is annoying to make by accident. The area cache is
+ * a feature this program does not have yet, so its slot stays empty
+ * rather than the row closing up. Saved points arrived in 0017.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -100,6 +99,38 @@ int  ui_panel_at(int px, int py, int sw, int sh);
  * something the sun cannot see, and that something passes. Neither is
  * kept across a restart, as there: an override that survives a reboot is
  * one nobody remembers setting. */
+/* ---- the saved points panel (0017) ---- */
+
+/* src: original/tab5_map.cpp PP_ROW_H, PP_HEAD_H, PP_FOOT_H, and
+ * pinPanelRect(): two thirds of the screen each way, centred. */
+#define UI_PP_ROW_H     (64)
+#define UI_PP_HEAD_H    (70)
+#define UI_PP_FOOT_H    (62)
+
+void ui_pins_rect(int sw, int sh, ui_rect_t *r);
+
+/* Rows on one page. */
+int  ui_pins_rows(int sw, int sh);
+
+typedef enum {
+    UI_PINS_NOTHING = 0,
+    UI_PINS_OUTSIDE,    /* closes it */
+    UI_PINS_CLOSE,
+    UI_PINS_SAVE,       /* "save here", the heading's right-hand end */
+    UI_PINS_STOP,       /* "stop guiding", in the footer */
+    UI_PINS_UP,
+    UI_PINS_DOWN,
+    UI_PINS_PICK,       /* a row: guide to it, or stop if it is the target */
+    UI_PINS_DELETE,     /* a row's right-hand end */
+} ui_pins_hit_t;
+
+/*
+ * What a tap on the panel hits, as the original's pinPanelTouch(). Rows
+ * are page rows; *row is the one hit, for PICK and DELETE. The caller
+ * adds its scroll offset and checks the row has a point in it.
+ */
+ui_pins_hit_t ui_pins_at(int px, int py, int sw, int sh, int *row);
+
 typedef enum { UI_THEME_AUTO = 0, UI_THEME_DAY, UI_THEME_NIGHT, UI_THEME_COUNT } ui_theme_t;
 typedef enum { UI_BRIGHT_AUTO = 0, UI_BRIGHT_LOW, UI_BRIGHT_MED, UI_BRIGHT_HIGH, UI_BRIGHT_COUNT } ui_bright_t;
 

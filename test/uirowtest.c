@@ -45,9 +45,9 @@ int main(void)
         CHECK(ui_button_at(r.x - 6, r.y + 5, SW, SH) == want, "6 px left of %d", i);
         CHECK(ui_button_at(r.x + r.w / 2, r.y - 27, SW, SH) == -1, "27 px above %d", i);
     }
-    CHECK(ui_button_present(UI_BTN_HOME) && ui_button_present(UI_BTN_SET) &&
-          ui_button_present(UI_BTN_SLEEP), "the three");
-    CHECK(!ui_button_present(UI_BTN_PINS) && !ui_button_present(UI_BTN_CACHE), "the two to come");
+    CHECK(ui_button_present(UI_BTN_HOME) && ui_button_present(UI_BTN_PINS) &&
+          ui_button_present(UI_BTN_SET) && ui_button_present(UI_BTN_SLEEP), "the four");
+    CHECK(!ui_button_present(UI_BTN_CACHE), "the one to come");
     CHECK(ui_button_at(SW / 2, SH / 2, SW, SH) == -1, "the middle of the map");
 
     printf("the pan squares: three by three over the map band\n");
@@ -101,6 +101,29 @@ int main(void)
         /* On a short screen it is held to the screen less 40. */
         ui_panel_rect(SW, 200, &p);
         CHECK(p.h == 160, "short screen %d", p.h);
+    }
+
+    printf("the saved points panel\n");
+    {
+        ui_rect_t p;
+        ui_pins_rect(SW, SH, &p);
+        CHECK(p.w == SW * 2 / 3 && p.h == SH * 2 / 3 && p.x == (SW - p.w) / 2, "rect");
+        const int rows = ui_pins_rows(SW, SH);
+        CHECK(rows == (p.h - 70 - 62) / 64, "rows %d", rows);
+        int row;
+        CHECK(ui_pins_at(p.x - 1, p.y + 100, SW, SH, &row) == UI_PINS_OUTSIDE, "outside");
+        CHECK(ui_pins_at(p.x + p.w - 50, p.y + 20, SW, SH, &row) == UI_PINS_SAVE, "save");
+        CHECK(ui_pins_at(p.x + 50, p.y + 20, SW, SH, &row) == UI_PINS_NOTHING, "heading");
+        CHECK(ui_pins_at(p.x + 20, p.y + p.h - 20, SW, SH, &row) == UI_PINS_CLOSE, "close");
+        CHECK(ui_pins_at(p.x + 300, p.y + p.h - 20, SW, SH, &row) == UI_PINS_STOP, "stop");
+        CHECK(ui_pins_at(p.x + p.w - 120, p.y + p.h - 20, SW, SH, &row) == UI_PINS_UP, "up");
+        CHECK(ui_pins_at(p.x + p.w - 40, p.y + p.h - 20, SW, SH, &row) == UI_PINS_DOWN, "down");
+        CHECK(ui_pins_at(p.x + p.w - 200, p.y + p.h - 20, SW, SH, &row) == UI_PINS_NOTHING, "footer gap");
+        for (int k = 0; k < rows; k++) {
+            const int y = p.y + 70 + k * 64 + 30;
+            CHECK(ui_pins_at(p.x + 100, y, SW, SH, &row) == UI_PINS_PICK && row == k, "pick %d", k);
+            CHECK(ui_pins_at(p.x + p.w - 40, y, SW, SH, &row) == UI_PINS_DELETE && row == k, "del %d", k);
+        }
     }
 
     printf("the overrides cycle back to automatic\n");

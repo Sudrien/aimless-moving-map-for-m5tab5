@@ -49,14 +49,24 @@ What works:
 
 - The original's button row and settings panel, and panning by touch.
 
-Not yet: labels, saved points, the area cache. See `ARCHITECTURE.md`.
+- Saved points, and a bearing and distance back to one.
+
+Not yet: labels, the area cache. See `ARCHITECTURE.md`.
 
 ## On the screen
 
-Along the bottom, three buttons, where the original had them:
+Along the bottom, four buttons, where the original had them:
 
 - **centred / recentre** -- lit while you have panned the map away from
   where you are; press it to follow your position again.
+- **points (N) / to NAME** -- saved points. "save here" drops one at
+  your position; tap a point to be guided to it, and again (or "stop
+  guiding") to stop; "del" removes one. Up to 32, kept on the card in
+  the original's `waypoints.bin`, so points saved under it are here too.
+  While guiding, the point's name, distance and direction lead the
+  status line, and an arrow from your position points at it -- a
+  straight line, not a route: the map data has no road network to
+  route on.
 - **settings** -- the palette (auto, day, night), the brightness (auto,
   low, medium, high) and the Wi-Fi network. Tap a row to change it, and
   anywhere outside the panel to close it. The overrides last until the
@@ -67,8 +77,7 @@ Along the bottom, three buttons, where the original had them:
 Tap the map's edges and corners to pan a third of a screen that way. The
 middle is left alone: that is where your position is drawn.
 
-The two empty places in the row are for saved points and the area
-cache, which are still to come.
+The empty place in the row is for the area cache, still to come.
 
 ## Networks
 
