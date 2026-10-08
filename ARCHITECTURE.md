@@ -124,3 +124,12 @@ for the banner, a line per archive found, "first fix after N ms", and
 
 The first IDF build: `-Wformat-truncation` is an error there, and GCC
 sizes `"%d:/"` for any int. The buffer is 16 bytes.
+
+### 0007 -- the shared partition table
+
+0005 gave this program a table of its own, with nvs at 0x9000 x 0x6000.
+The original and defeatist both use the Arduino core's app3M_fat9M_16MB,
+nvs at 0x9000 x 0x5000, and that is where their saved networks live.
+Milestone 2 reads them from there, so the table is theirs again, byte for
+byte. Flashing it over 0005 needs a full `idf.py flash`, which writes the
+table; the app is 3 MB now, not 4.

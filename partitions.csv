@@ -1,4 +1,13 @@
-# Name,   Type, SubType, Offset,   Size
-nvs,      data, nvs,     0x9000,   0x6000,
-phy_init, data, phy,     0xf000,   0x1000,
-factory,  app,  factory, 0x10000,  0x400000,
+# src: original/partitions.csv, which is the Arduino core's
+# app3M_fat9M_16MB, and defeatist-music-player-for-m5tab5's, which is the
+# same table. All three programs run on one Tab5 in turn, and nvs at
+# 0x9000 x 0x5000 is where each keeps its saved networks: a table that
+# moves or resizes it costs the next program flashed its list.
+#
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x5000,
+otadata,  data, ota,     0xe000,   0x2000,
+app0,     app,  ota_0,   0x10000,  0x300000,
+app1,     app,  ota_1,   0x310000, 0x300000,
+ffat,     data, fat,     0x610000, 0x9E0000,
+coredump, data, coredump,0xFF0000, 0x10000,
