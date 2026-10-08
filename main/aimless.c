@@ -78,6 +78,7 @@
 #include "waypoints.h"
 #include "worldtile.h"
 #include "lastfix.h"
+#include "area.h"
 #include "mercator.h"
 
 static const char *TAG = "aimless";
@@ -186,6 +187,11 @@ static bool        s_panning;
 static double      s_anchor_x, s_anchor_y;
 static bool        s_mark_ok;       /* a measured position, to draw */
 static double      s_mark_x, s_mark_y;
+
+/* The area cache (0026): the walk, under s_lock, stepped by the render
+ * task between the tiles the screen wants; and the button's confirm. */
+static area_t      s_area;
+static int64_t     s_area_armed_until;
 
 /* Saved points (0017): the list, the panel and its page. */
 static wp_list_t   s_wp;
@@ -606,6 +612,101 @@ static void text_centred(int cx, int cy, const char *s, int max_w, uint16_t c)
     gfx_draw_text(cx - tw / 2, cy - GFX_GLYPH_H(TEXT_SCALE) / 2, s, TEXT_SCALE, max_w, c);
 }
 
+/* src: original drawFooter(): green once held, orange while armed. */
+#define COL_CACHE_HELD  RGB(30, 90, 50)
+#define COL_CACHE_ARMED RGB(255, 165, 0)
+/* src: original handleTouch(): a second tap within 5 s starts it. */
+#define AREA_CONFIRM_US (5 * 1000000LL)
+
+/* Where the square would be: the grid's middle tile, as the original's
+ * prefetch_centre() -- the grid rather than the fix, so it works if the
+ * fix has dropped for a moment. False before the grid is placed. */
+static bool area_centre(int32_t *cx, int32_t *cy, double *lat)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const bool placed = s_view.grid.initialised;
+    const tile_id_t o = s_view.grid.origin;
+    xSemaphoreGive(s_lock);
+    if (!placed) return false;
+    const int32_t n = 1 << VIEW_ZOOM;
+    *cx = ((o.x + GRID_N / 2) % n + n) % n;
+    *cy = o.y + GRID_N / 2;
+    double lon;
+    const merc_pt_t mid = { *cx + 0.5, *cy + 0.5, VIEW_ZOOM };
+    merc_to_ll(mid, lat, &lon);
+    return true;
+}
+
+/* For the button: busy and how far, held offline already, and how wide
+ * the square is. "Held" asks every archive's header about 250 tiles, so
+ * it is memoised for 2 s, as the original's held_memo. */
+static void area_state(bool *busy, int *pct, bool *held, double *km)
+{
+    static int64_t memo_at;
+    static bool memo_held;
+    static double memo_km = 27.0;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    *busy = s_area.active;
+    *pct = area_progress(&s_area);
+    xSemaphoreGive(s_lock);
+    const int64_t now = esp_timer_get_time();
+    if (!*busy && (!memo_at || now - memo_at > 2000000)) {
+        int32_t cx, cy;
+        double lat;
+        memo_held = false;
+        if (area_centre(&cx, &cy, &lat)) {
+            memo_held = area_pending(&s_set, VIEW_ZOOM, cx, cy) == 0;
+            /* The square's width at this latitude; the original used a
+             * fixed cos 42 (0.74). src: the equator, 40075 km. */
+            memo_km = (2 * AREA_RADIUS + 1) * 40075.0 * cos(lat * M_PI / 180.0) /
+                      (double)(1 << VIEW_ZOOM);
+        }
+        memo_at = now;
+    }
+    *held = !*busy && memo_held;
+    *km = memo_km;
+}
+
+static void setup_want(bool apply);    /* below, with the rest of setup */
+
+/* The cache button, as the original's handleTouch(). */
+static void area_tap(void)
+{
+    bool busy, held;
+    int pct;
+    double km;
+    area_state(&busy, &pct, &held, &km);
+    if (busy) return;
+    if (held) {
+        ESP_LOGI(TAG, "area: already offline on the card");
+        return;
+    }
+    if (!s_online) {
+        /* Checked after "held": with the area on the card there is
+         * nothing to download, and asking for a network to get it would
+         * be solving a problem nobody has. */
+        if (s_setup == SETUP_NONE) {
+            ESP_LOGI(TAG, "setup: asked for by the cache button");
+            setup_want(true);
+        }
+        return;
+    }
+    const int64_t now = esp_timer_get_time();
+    if (now >= s_area_armed_until) {
+        s_area_armed_until = now + AREA_CONFIRM_US;
+        ESP_LOGI(TAG, "area: tap again within 5 s to fetch %.0f km around here", km);
+        return;
+    }
+    s_area_armed_until = 0;
+    int32_t cx, cy;
+    double lat;
+    if (!area_centre(&cx, &cy, &lat)) return;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    area_start(&s_area, VIEW_ZOOM, cx, cy);
+    xSemaphoreGive(s_lock);
+    ESP_LOGI(TAG, "area: %d tiles around %u/%d/%d", area_total(), VIEW_ZOOM, cx, cy);
+}
+
 static void draw_footer(void)
 {
     for (int i = 0; i < UI_BTN_COUNT; i++) {
@@ -631,6 +732,27 @@ static void draw_footer(void)
             else snprintf(pl, sizeof(pl), "points (%d)", s_wp.n);
             label = pl;
             bg = t >= 0 ? COL_BTN_LIT : COL_BTN;
+            break;
+        }
+        case UI_BTN_CACHE: {
+            /* src: original drawFooter()'s cache button: its progress while
+             * busy, "offline" once the cards hold the whole square, a
+             * confirm armed by the first tap, "wifi set" with no network,
+             * and otherwise how wide the square is. */
+            static char cl[40];
+            int pct;
+            bool busy, held;
+            double km;
+            area_state(&busy, &pct, &held, &km);
+            const bool armed = esp_timer_get_time() < s_area_armed_until;
+            if (busy)        snprintf(cl, sizeof(cl), "cache %d%%", pct);
+            else if (held)   snprintf(cl, sizeof(cl), "offline");
+            else if (armed)  snprintf(cl, sizeof(cl), "confirm?");
+            else if (!s_online) snprintf(cl, sizeof(cl), "wifi set");
+            else             snprintf(cl, sizeof(cl), "cache %d km", (int)lround(km));
+            label = cl;
+            bg = busy ? COL_BTN : held ? COL_CACHE_HELD : armed ? COL_CACHE_ARMED
+               : s_online ? COL_CHIP_NET : COL_BTN;
             break;
         }
         case UI_BTN_SET:   label = "settings";   break;
@@ -918,6 +1040,47 @@ static const char *from_name(tilesrc_from_t f)
     }
 }
 
+/*
+ * One tile of the area cache, when the screen wants nothing (0026). Only
+ * with a network: offline it waits where it is rather than burn through
+ * the square marking everything failed. False when there was nothing to
+ * do.
+ */
+static bool area_step(void)
+{
+    if (!s_src.remote) return false;
+    tile_id_t id;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const bool any = s_area.active && area_next(&s_area, &id);
+    xSemaphoreGive(s_lock);
+    if (!any) return false;
+
+    tilesrc_from_t from;
+    const tile_state_t t = tilesrc_store(&s_src, &s_render, id, 0, &from);
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (t == TILE_READY) {
+        if (from == TILESRC_NET) s_area.fetched++;
+        else if (from == TILESRC_LOCAL) s_area.offline++;
+        else s_area.cached++;
+    } else if (t == TILE_NODATA) {
+        s_area.empty++;
+    } else {
+        s_area.failed++;
+    }
+    const area_t a = s_area;
+    xSemaphoreGive(s_lock);
+    s_dirty = true;     /* the button's percentage */
+
+    if (!a.active)
+        ESP_LOGI(TAG, "area: %d tiles done -- %d from the network, %d already cached, "
+                      "%d on the card, %d empty, %d failed",
+                 a.done, a.fetched, a.cached, a.offline, a.empty, a.failed);
+    else if (a.done % 25 == 0)
+        ESP_LOGI(TAG, "area: %d of %d", a.done, a.total);
+    return true;
+}
+
 static void render_task(void *arg)
 {
     (void)arg;
@@ -984,7 +1147,10 @@ static void render_task(void *arg)
             continue;
         }
 
-        if (!took) { vTaskDelay(pdMS_TO_TICKS(100)); continue; }
+        if (!took) {
+            if (!area_step()) vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
 
         const int64_t t0 = esp_timer_get_time();
         tilesrc_from_t from;
@@ -1472,6 +1638,9 @@ static void ui_touch(const gnss_fix_t *fix)
         return;
     }
     switch (ui_button_at(x, y, W, H)) {
+    case UI_BTN_CACHE:
+        area_tap();
+        break;
     case UI_BTN_HOME:
         /* Harmless when already following, and deliberately still live:
          * it is what you press when unsure (original handleTouch()). */

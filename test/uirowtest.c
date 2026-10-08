@@ -45,9 +45,8 @@ int main(void)
         CHECK(ui_button_at(r.x - 6, r.y + 5, SW, SH) == want, "6 px left of %d", i);
         CHECK(ui_button_at(r.x + r.w / 2, r.y - 27, SW, SH) == -1, "27 px above %d", i);
     }
-    CHECK(ui_button_present(UI_BTN_HOME) && ui_button_present(UI_BTN_PINS) &&
-          ui_button_present(UI_BTN_SET) && ui_button_present(UI_BTN_SLEEP), "the four");
-    CHECK(!ui_button_present(UI_BTN_CACHE), "the one to come");
+    for (int i = 0; i < UI_BTN_COUNT; i++) CHECK(ui_button_present(i), "slot %d empty", i);
+    CHECK(!ui_button_present(-1) && !ui_button_present(UI_BTN_COUNT), "out of range");
     CHECK(ui_button_at(SW / 2, SH / 2, SW, SH) == -1, "the middle of the map");
 
     printf("the pan squares: three by three over the map band\n");

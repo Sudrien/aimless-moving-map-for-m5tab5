@@ -8,12 +8,12 @@
  * screen is passed in (sw x sh, landscape) rather than read from the
  * panel.
  *
- * FIVE SLOTS, FOUR BUTTONS. The original's row is home, saved points,
- * area cache, settings and screen off, in that order -- by how often
- * each is reached for while moving, with screen off last because it is
- * the one press that is annoying to make by accident. The area cache is
- * a feature this program does not have yet, so its slot stays empty
- * rather than the row closing up. Saved points arrived in 0017.
+ * FIVE BUTTONS. The original's row is home, saved points, area cache,
+ * settings and screen off, in that order -- by how often each is reached
+ * for while moving, with screen off last because it is the one press
+ * that is annoying to make by accident. Saved points arrived in 0017 and
+ * the area cache in 0026; until then their slots were left empty rather
+ * than the row closing up.
  *
  * SPDX-License-Identifier: MIT
  */

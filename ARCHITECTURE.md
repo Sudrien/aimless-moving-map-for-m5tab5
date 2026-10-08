@@ -706,3 +706,50 @@ which the IDF build at its own level had not tripped but another
 optimisation level would, and both are bounded now:
 netremote.c's build name read from build.txt (already length-checked)
 and portal.c's non-ASCII hint in the page message.
+
+### 0026 -- the area cache
+
+The original's prefetch and the button that ran it, the last of the
+row's five: a square of 15 x 15 z14 tiles around the grid's middle --
+PREFETCH_RADIUS 7, about 27 km across at 42 N -- fetched into the tile
+cache ahead of time, without drawing them, so the map works there with
+no network.
+
+**area.c is the walk**, free of ESP-IDF and host-tested: nearest first,
+ring by ring (the original went row by row, so a walk cut short had the
+top of the square rather than its middle), x wrapping, rows past the
+poles skipped; then the overview's z12 tiles over the same square, 5 x
+5, which the original never fetched because its overview predated its
+prefetch. area_pending() is the original's map_prefetch_pending(): how
+many of those tiles no archive's header covers, header fields only.
+
+**tilesrc_store()** is a tile held without being drawn: covered by a
+card archive's header and not read at all (the original found that
+reading and caching those was the whole of a walk over a planet file);
+already in the cache, payload or marker, and not asked for again;
+otherwise fetched, checked for gzip, and cached -- a no-data answer as
+a marker. Not drawn to validate it, as the original's were not: one
+that will not draw is fetched again by tilesrc_draw()'s rule for a
+cached payload that fails.
+
+**On the render task**, not a task of its own as the original's was:
+the tile source is not thread-safe, and stepping the walk only when the
+screen wants nothing -- no grid tile, no overview -- is the original's
+yield_to_renderer() for free. It waits while offline rather than
+marking the square failed.
+
+**The button** is the original's in all its states: "cache N km",
+"confirm?" for 5 s after the first tap, "cache N%" while it runs,
+"offline" in green when the cards cover the square (that check memoised
+for 2 s, as there), and "wifi set" with no network, whose tap opens
+0012's setup. N is worked out at the square's own latitude; the
+original used cos 42 degrees for every latitude.
+
+Not ported: the original's world-floor walk (z0-6 to the cache,
+checkpointed over hours). 0020's embedded world covers the boot screen,
+and the overview covers the gaps it was for.
+
+Host: areatest (450 checks), tilesrctest 14 more, uirowtest. Device:
+every main/*.c compiled with -c at -Og, -Os and -O2 for the P4; not
+built. On the board: "area: tap again within 5 s ...", "area: 250 tiles
+around 14/x/y", "area: 25 of 250" every 25, and a summary at the end.

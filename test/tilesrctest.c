@@ -158,6 +158,55 @@ int main(void)
     CHECK(s.st.cache_hits == 2 && s.st.net_hits == 2 && s.st.local_hits == 1,
           "stats %u/%u/%u", s.st.cache_hits, s.st.net_hits, s.st.local_hits);
 
+    /* ---- tilesrc_store(): the area cache's step (0026) ---- */
+    {
+        tilecache_t c2;
+        memset(&c2, 0, sizeof(c2));
+        CHECK(tilecache_open(&c2, dir, "store", 64, big, free), "store cache");
+        mapset_t empty = { 0 };
+        tilesrc_t st = { &empty, &c2, &remote, { 0 } };
+        net.reads = 0;
+        CHECK(tilesrc_store(&st, &r, tid(CX + 1, CY + 1), 0, &from) == TILE_READY &&
+              from == TILESRC_NET && net.reads > 0, "stored from the network: %d", from);
+        uint32_t m = r.tile_cap;
+        CHECK(tilecache_get(&c2, Z, CX + 1, CY + 1, r.tile, &m) && m > 0, "in the cache");
+        /* And it draws from there, as the network's would. */
+        uint16_t *pa = malloc((size_t)PX * PX * 2), *pb = malloc((size_t)PX * PX * 2);
+        CHECK(maprender_tile(&r, &remote, tid(CX + 1, CY + 1), pa, 0) == TILE_READY, "ref");
+        CHECK(tilesrc_draw(&st, &r, tid(CX + 1, CY + 1), pb, 0, &from) == TILE_READY &&
+              from == TILESRC_CACHE && !memcmp(pa, pb, (size_t)PX * PX * 2), "drawn from it");
+        free(pa);
+        free(pb);
+        net.reads = 0;
+        CHECK(tilesrc_store(&st, &r, tid(CX + 1, CY + 1), 0, &from) == TILE_READY &&
+              from == TILESRC_CACHE && net.reads == 0, "held: no network");
+        CHECK(tilesrc_store(&st, &r, tid(CX + 9, CY), 0, &from) == TILE_NODATA &&
+              tilecache_is_empty(&c2, Z, CX + 9, CY), "no data: a marker");
+        net.reads = 0;
+        CHECK(tilesrc_store(&st, &r, tid(CX + 9, CY), 0, &from) == TILE_NODATA &&
+              from == TILESRC_CACHE && net.reads == 0, "marker held: no network");
+        net.fail = 1;
+        CHECK(tilesrc_store(&st, &r, tid(CX - 1, CY + 1), 0, &from) == TILE_ERROR, "failure");
+        net.fail = 0;
+        m = r.tile_cap;
+        CHECK(!tilecache_get(&c2, Z, CX - 1, CY + 1, r.tile, &m), "failure not cached");
+        /* Covered by the card: not read, not copied. */
+        st.local = &set;
+        net.reads = 0;
+        lnet.reads = 0;
+        CHECK(tilesrc_store(&st, &r, tid(CX, CY - 1), 0, &from) == TILE_READY &&
+              from == TILESRC_LOCAL && net.reads == 0 && lnet.reads == 0, "local: nothing read");
+        m = r.tile_cap;
+        CHECK(!tilecache_get(&c2, Z, CX, CY - 1, r.tile, &m), "local tile copied to the cache");
+        st.local = &empty;
+        st.remote = NULL;
+        CHECK(tilesrc_store(&st, &r, tid(CX - 1, CY), 0, &from) == TILE_ERROR, "offline");
+        tilecache_close(&c2);
+        st.cache = &c2;
+        CHECK(tilesrc_store(&st, &r, tid(CX - 1, CY), 0, &from) == TILE_ERROR, "no cache");
+        tilecache_remove(dir, "store");
+    }
+
     tilecache_close(&c);
     tilecache_remove(dir, "net");
     rmdir(dir);

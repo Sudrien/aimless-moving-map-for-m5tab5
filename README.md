@@ -58,7 +58,10 @@ What works:
   map uses (it needs network once, at the first configure); without it
   the boot screen is black.
 
-Not yet: labels, the area cache. See `ARCHITECTURE.md`.
+- The area cache: about 27 km square around you fetched onto the card
+  ahead of time, before you leave coverage.
+
+Not yet: labels and place names. See `ARCHITECTURE.md`.
 
 What this keeps on the card is hidden, as Defeatist's is: dotted names
 with the FAT hidden attribute set, so they are not the first thing you
@@ -70,7 +73,7 @@ the first time they are read, so their contents carry over.
 
 ## On the screen
 
-Along the bottom, four buttons, where the original had them:
+Along the bottom, five buttons, as the original had them:
 
 - **centred / recentre** -- lit while you have panned the map away from
   where you are; press it to follow your position again.
@@ -83,6 +86,12 @@ Along the bottom, four buttons, where the original had them:
   status line, and an arrow from your position points at it -- a
   straight line, not a route: the map data has no road network to
   route on.
+- **cache N km / confirm? / cache N% / offline / wifi set** -- the area
+  cache. Tap, then tap again within five seconds, to fetch the tiles of
+  a square N km across around the map into the card's tile cache, so it
+  draws there with no network. It shows its progress while it runs, and
+  "offline" when the cards' own archives already cover the square. With
+  no network it reads "wifi set", and a tap opens Wi-Fi setup.
 - **settings** -- the palette (auto, day, night), the brightness (auto,
   low, medium, high) and the Wi-Fi network. Tap a row to change it, and
   anywhere outside the panel to close it. The overrides last until the
@@ -93,7 +102,7 @@ Along the bottom, four buttons, where the original had them:
 Tap the map's edges and corners to pan a third of a screen that way. The
 middle is left alone: that is where your position is drawn.
 
-The empty place in the row is for the area cache, still to come.
+
 
 ## Networks
 

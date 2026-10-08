@@ -63,6 +63,27 @@ typedef struct {
 tile_state_t tilesrc_draw(tilesrc_t *s, maprender_t *r, tile_id_t id,
                           uint16_t *px, int split, tilesrc_from_t *from);
 
+/*
+ * Make sure tile `id` is held offline, without drawing it: the area
+ * cache's step (0026), as the original prefetch_task(). A tile a local
+ * archive's header covers is offline already and is not read at all; one
+ * in the cache, payload or "no data" marker, is not asked for again;
+ * otherwise the network is asked and what it says is cached.
+ *
+ *   TILE_READY    held: *from says where (LOCAL, CACHE or NET)
+ *   TILE_NODATA   there is no such tile (a marker is held for it)
+ *   TILE_ERROR    the network failed, or there is no network, or no
+ *                 cache to keep it in; nothing was stored
+ *
+ * The payload is stored as the network sent it, after a check that it is
+ * gzip, as the original's was: drawing 250 tiles to validate them would
+ * cost what the walk is meant to save, and one that will not draw is
+ * fetched again by tilesrc_draw() (tilesrc.h's rule for a cached payload
+ * that fails).
+ */
+tile_state_t tilesrc_store(tilesrc_t *s, maprender_t *r, tile_id_t id,
+                           int split, tilesrc_from_t *from);
+
 #ifdef __cplusplus
 }
 #endif

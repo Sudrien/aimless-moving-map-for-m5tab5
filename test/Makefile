@@ -34,6 +34,8 @@
 #
 # lastfixtest: main/lastfix.c, the original's /lastfix.bin.
 #
+# areatest: main/area.c, the area cache's walk, against the fixture.
+#
 # -fno-sanitize=shift: raster.c converts to fixed point with
 # `v << RS_FRAC_BITS` on signed values that can be negative (geometry
 # outside the tile). That is undefined in C11 and does the arithmetic
@@ -54,7 +56,7 @@ LDFLAGS := -fsanitize=address,undefined -fno-sanitize=shift -lm
 CORE_SRCS := $(CORE)/src/inflate.c $(CORE)/src/mvt.c $(CORE)/src/pmtiles.c \
              $(CORE)/src/raster.c $(CORE)/src/style.c $(CORE)/src/tile_grid.c
 
-all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix
+all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area
 
 maptiletest: maptiletest.c ../main/maptile.c ../main/maptile.h $(CORE_SRCS) fixture.pmtiles
 	$(CC) $(CFLAGS) -o $@ maptiletest.c ../main/maptile.c $(CORE_SRCS) $(LDFLAGS)
@@ -129,7 +131,13 @@ lastfixtest: lastfixtest.c ../main/lastfix.c ../main/lastfix.h
 run-lastfix: lastfixtest
 	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./lastfixtest
 
-clean:
-	rm -f lastfixtest maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest suntest uirowtest waypointstest worldtiletest worldtile.bin
+areatest: areatest.c ../main/area.c ../main/area.h ../main/mapset.c ../main/maptile.c $(CORE_SRCS) fixture.pmtiles
+	$(CC) $(CFLAGS) -o $@ areatest.c ../main/area.c ../main/mapset.c ../main/maptile.c $(CORE_SRCS) $(LDFLAGS)
 
-.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix clean
+run-area: areatest
+	cd $(CURDIR) && ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./areatest
+
+clean:
+	rm -f areatest lastfixtest maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest suntest uirowtest waypointstest worldtiletest worldtile.bin
+
+.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area clean

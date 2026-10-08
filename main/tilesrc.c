@@ -82,3 +82,41 @@ tile_state_t tilesrc_draw(tilesrc_t *s, maprender_t *r, tile_id_t id,
     s->st.misses++;
     return TILE_NODATA;
 }
+
+tile_state_t tilesrc_store(tilesrc_t *s, maprender_t *r, tile_id_t id,
+                           int split, tilesrc_from_t *from)
+{
+    if (from) *from = TILESRC_NONE;
+    const uint8_t  dz = (uint8_t)(id.z - split);
+    const uint32_t dx = (uint32_t)id.x >> split;
+    const uint32_t dy = (uint32_t)id.y >> split;
+
+    /* Already offline: not read, so not copied into the cache either --
+     * the original found this was the whole of a walk over a planet
+     * archive, real bytes and real minutes for nothing. */
+    if (s->local && s->local->n && mapset_covers_any(s->local, dz, dx, dy)) {
+        if (from) *from = TILESRC_LOCAL;
+        return TILE_READY;
+    }
+    if (!s->cache || !tilecache_is_open(s->cache)) return TILE_ERROR;
+    uint32_t n = r->tile_cap;
+    if (tilecache_get(s->cache, dz, dx, dy, r->tile, &n)) {
+        if (from) *from = TILESRC_CACHE;
+        return n ? TILE_READY : TILE_NODATA;
+    }
+    if (!s->remote) return TILE_ERROR;
+    n = 0;
+    const tile_state_t f = maprender_fetch(r, s->remote, id, split, &n);
+    if (f == TILE_NODATA) {
+        tilecache_put(s->cache, dz, dx, dy, NULL, 0);
+        if (from) *from = TILESRC_NET;
+        return TILE_NODATA;
+    }
+    if (f != TILE_READY || n < 2 || r->tile[0] != 0x1F || r->tile[1] != 0x8B) {
+        s->st.errors++;
+        return TILE_ERROR;
+    }
+    if (!tilecache_put(s->cache, dz, dx, dy, r->tile, n)) return TILE_ERROR;
+    if (from) *from = TILESRC_NET;
+    return TILE_READY;
+}

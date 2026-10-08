@@ -7,7 +7,8 @@
 
 bool ui_button_present(int i)
 {
-    return i == UI_BTN_HOME || i == UI_BTN_PINS || i == UI_BTN_SET || i == UI_BTN_SLEEP;
+    /* All five since 0026. */
+    return i >= 0 && i < UI_BTN_COUNT;
 }
 
 void ui_button_rect(int i, int sw, int sh, ui_rect_t *r)
