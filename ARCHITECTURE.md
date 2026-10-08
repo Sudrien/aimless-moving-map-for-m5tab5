@@ -499,3 +499,37 @@ Host: waypointstest (33 checks), uirowtest's panel checks (20).
 Device: aimless.c compiled -fsyntax-only as before; not built. On the
 board: "saved points: N" at boot, "added", "removed", "guiding to",
 "wrote N".
+
+### 0018 -- exFAT
+
+The last of milestone 3's storage item: exFAT cards and drives, and so
+archives over 4 GB, up to a planet build of about 126 GB in one file.
+
+**Defeatist's machinery, unchanged.** IDF ships FatFs with exFAT
+compiled out and no Kconfig switch for it. cmake/exfat.cmake runs
+tools/enable_exfat.sh at the first configure, before project.cmake, to
+copy IDF's fatfs into components/fatfs with FF_FS_EXFAT, FF_LBA64 and
+FF_USE_TRIM 0 set, the Kconfig-guard fix that exFAT's code paths need,
+and the 6035 hook that names a damaged exFAT entry (feckless-storage's
+storage.c logs it). cmake/idfcopy.cmake records which IDF the copy came
+from and refuses a configure under another. All three files are
+defeatist's at 74535ca; components/fatfs is generated and ignored.
+TAB5_NO_EXFAT in the environment opts out; README says why someone
+might.
+
+**Nothing in the map code changed.** ffread.c has read through FatFs's
+f_lseek() since 0005 precisely so that this would be enough: FSIZE_t
+becomes 64 bits with exFAT, and the offsets were uint64_t throughout,
+mapcore's PMTiles reader included. The tile cache stays on stdio and
+under 2 GB, which it always was (0008).
+
+Checked here: enable_exfat.sh run against IDF v5.5's fatfs; the patched
+ff.c and ffread.c compiled -fsyntax-only for the P4 with -Wall -Werror,
+and FSIZE_t asserted to be 8 bytes with FF_FS_EXFAT 1. Not built with
+idf.py. On the board, the first configure prints "exfat: patching a
+local fatfs component", later ones "components/fatfs present"; an
+exFAT card mounts and its archives are listed as before, with sizes
+past 4096 MB.
+
+The first build after this patch needs a clean configure (rm -rf build)
+so that components/fatfs exists before IDF scans for components.

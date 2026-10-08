@@ -1,5 +1,5 @@
 /*
- * ffread.c -- see ffread.h. original/bigfile.cpp, on FAT32.
+ * ffread.c -- see ffread.h. original/bigfile.cpp, on FAT32 or exFAT.
  *
  * SPDX-License-Identifier: MIT
  */

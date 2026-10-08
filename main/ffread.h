@@ -1,15 +1,17 @@
 /*
  * ffread.h -- a file on the card read through FatFs directly.
  *
- * original/bigfile.cpp, without the exFAT half. Why FatFs and not stdio:
- * fseek() takes a long, 32 bits here, so stdio stops at 2 GB, and
- * feckless-storage's storage_io_read_at() refuses past that for the same
- * reason. plan-extracts.py sizes bands to fit under FAT32's 4 GB, so an
- * extract is routinely between the two. f_lseek() takes FSIZE_t, which
- * on FAT32 is 32 unsigned bits: the whole of any file FAT32 can hold.
+ * original/bigfile.cpp. Why FatFs and not stdio: fseek() takes a long,
+ * 32 bits here, so stdio stops at 2 GB, and feckless-storage's
+ * storage_io_read_at() refuses past that for the same reason.
+ * plan-extracts.py sizes bands to fit under FAT32's 4 GB, so an extract
+ * is routinely between the two. f_lseek() takes FSIZE_t, which on FAT32
+ * is 32 unsigned bits: the whole of any file FAT32 can hold.
  *
- * A file over 4 GB needs exFAT, and exFAT needs the patched FatFs the
- * player vendors (its cmake/exfat.cmake). Not this milestone.
+ * With exFAT (0018: cmake/exfat.cmake patches FatFs at configure time)
+ * FSIZE_t is 64 bits, so the same calls reach the whole of a planet
+ * archive, about 126 GB. Nothing here changed for it: the offsets were
+ * uint64_t from the start, for this.
  *
  * Fast seek (CONFIG_FATFS_USE_FASTSEEK) builds a cluster map at open, as
  * bigfile.cpp does; without it every seek walks the FAT chain, which the

@@ -51,6 +51,8 @@ What works:
 
 - Saved points, and a bearing and distance back to one.
 
+- Cards and USB drives in FAT32 or exFAT, and archives of any size.
+
 Not yet: labels, the area cache. See `ARCHITECTURE.md`.
 
 ## On the screen
@@ -108,9 +110,21 @@ own and set "Where remote tiles come from" and "Pinned build" under
 
 Protomaps basemap extracts, MVT tiles, gzip-compressed: what
 `pmtiles extract` produces from a Protomaps daily build. Zoom 14 must be
-in them. The card must be **FAT32**, so each file is under 4 GB; split a
-large area into bands with `original/plan-extracts.py`. exFAT, and one
-planet-sized file, need a patched FatFs and come later.
+in them; zoom 12 as well gives the soft overview while tiles arrive.
+
+The card can be **FAT32 or exFAT**. On FAT32 each file is under 4 GB, so
+split a large area into bands with `original/plan-extracts.py`. On exFAT
+one file can be any size, including a whole planet build -- about 126 GB,
+so a card of 129 GB or more, since the filesystem needs room of its own.
+
+exFAT comes from a patched copy of ESP-IDF's FatFs that the first
+`idf.py build` makes in `components/fatfs` (`cmake/exfat.cmake`, from
+Defeatist). exFAT was a Microsoft patent family; Microsoft published the
+specification in 2019 and committed it to the Open Invention Network's
+patent non-aggression pool. If that matters to you and you would rather
+not build it in, set `TAB5_NO_EXFAT` in the environment before the first
+configure, or run `./tools/enable_exfat.sh --revert` to take it out
+again.
 
 ## Building
 
