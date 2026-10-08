@@ -15,7 +15,7 @@ marker are drawn on top of this on the device.*
 A port of
 [m5tab5_m135_gnss_protomaps_live_area_map](https://github.com/Sudrien/m5tab5_m135_gnss_protomaps_live_area_map),
 kept unchanged in `original/` for reference, to plain ESP-IDF with no
-Arduino core and no M5Unified, on three libraries pulled out of
+Arduino core and no M5Unified, on four libraries pulled out of
 [Defeatist Music Player for M5Tab5](https://github.com/Sudrien/defeatist-music-player-for-m5tab5):
 
 | Library | For |
@@ -23,21 +23,37 @@ Arduino core and no M5Unified, on three libraries pulled out of
 | [feckless-drivers-for-m5tab5](https://github.com/Sudrien/feckless-drivers-for-m5tab5) | the I2C bus and IO expanders, the USB host |
 | [feckless-graphics-handler-for-m5tab5](https://github.com/Sudrien/feckless-graphics-handler-for-m5tab5) | the panel, the framebuffer, text |
 | [feckless-storage-handler-for-m5tab5](https://github.com/Sudrien/feckless-storage-handler-for-m5tab5) | the microSD card and USB drives |
+| [feckless-network-handler-for-m5tab5](https://github.com/Sudrien/feckless-network-handler-for-m5tab5) | Wi-Fi, saved networks, USB Ethernet |
 
-## Status: milestone 1
+## Status: milestone 2
 
 What works:
 
 - Every `.pmtiles` file in the root of the card or a USB drive is opened,
   and each tile is drawn from whichever archive covers it.
+- Where the card has nothing, tiles come over Wi-Fi or a USB Ethernet
+  cable from a Protomaps build, and are kept on the card for next time.
 - The position from the M135, followed as it moves, at zoom 14.
 - A marker, blue with a good 3D fix and grey with a rough one, and a
   status line with position, satellites, HDOP, speed and UTC.
 - Before the first fix, the map shows the first archive's centre, with
   no marker.
 
-Not yet: tiles over the network, labels, other zooms, the compass,
-waypoints, the Wi-Fi setup page. See `ARCHITECTURE.md`.
+Not yet: labels, other zooms, the compass, waypoints, the Wi-Fi setup
+page. See `ARCHITECTURE.md`.
+
+## Networks
+
+Saved Wi-Fi networks are shared with
+[Defeatist Music Player](https://github.com/Sudrien/defeatist-music-player-for-m5tab5):
+join a network there and this program joins it too. There is no way to
+add one here yet. A USB Ethernet adapter (ASIX, or Realtek in CDC-ECM
+mode) works without anything saved.
+
+Tiles come from Protomaps' daily builds by default. They ask that their
+bucket not be hotlinked; for regular use, copy a build to storage of your
+own and set "Where remote tiles come from" and "Pinned build" under
+"Aimless Moving Map" in `idf.py menuconfig`.
 
 ## Maps
 

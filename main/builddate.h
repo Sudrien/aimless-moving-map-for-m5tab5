@@ -16,6 +16,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 /* src: Howard Hinnant's days_from_civil, as original/netsource.cpp
  * epoch_days(), shifted to count from 1970. */
@@ -73,7 +74,12 @@ static inline bool bd_name(int32_t days, char out[9])
     int y, m, d;
     bd_ymd(days, &y, &m, &d);
     if (y < 1970 || y > 9999) return false;
-    snprintf(out, 9, "%04d%02d%02d", y, m, d);
+    /* Room for any int in each field: GCC's -Wformat-truncation, an
+     * error in the IDF build, cannot see the ranges bd_ymd() keeps to. */
+    char tmp[40];
+    const int n = snprintf(tmp, sizeof(tmp), "%04d%02d%02d", y, m, d);
+    if (n != 8) return false;
+    memcpy(out, tmp, 9);
     return true;
 }
 

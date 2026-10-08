@@ -164,6 +164,30 @@ int main(int argc, char **argv)
     for (int i = 0; i < GRID_COUNT; i++)
         CHECK(v.grid.slots[i].state == TILE_NODATA, "far slot %d state %d", i, v.grid.slots[i].state);
 
+    /* Redo: errors always, no-data on request; READY tiles are left. */
+    CHECK(mapview_redo(&v, false) == 0 && mapview_pending(&v) == 0, "redo with no errors");
+    v.grid.slots[2].state = TILE_ERROR;
+    CHECK(mapview_redo(&v, false) == 1 && mapview_pending(&v) == 1, "redo the error");
+    while (mapview_step(&v)) {}
+    CHECK(mapview_redo(&v, true) == GRID_COUNT && mapview_pending(&v) == GRID_COUNT,
+          "redo the no-data");
+    while (mapview_step(&v)) {}
+
+    /* take/commit: a shift between them refuses the commit and requeues. */
+    {
+        mapview_centre(&v, lat, lon);
+        render_job_t job;
+        uint16_t *px;
+        CHECK(mapview_take(&v, &job, &px), "take");
+        const int left = mapview_pending(&v);
+        mapview_centre(&v, lat, lon + 1.0 * tile_lon);
+        mapview_commit(&v, &job, TILE_READY);
+        int ready = 0;
+        for (int i = 0; i < GRID_COUNT; i++) ready += v.grid.slots[i].state == TILE_READY;
+        CHECK(ready == 0, "a stale commit landed (%d ready, %d left)", ready, left);
+        while (mapview_step(&v)) {}
+    }
+
     for (int i = 0; i < GRID_COUNT; i++) free(bufs[i]);
     maprender_free(&r);
     maparchive_close(&a);

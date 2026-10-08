@@ -68,6 +68,14 @@ bool mapview_step(mapview_t *v);
 bool mapview_take(mapview_t *v, render_job_t *job, uint16_t **px);
 void mapview_commit(mapview_t *v, const render_job_t *job, tile_state_t t);
 
+/*
+ * Queue again every tile that failed, and with `nodata_too` every tile
+ * that had no data -- for when a source has appeared since (the network
+ * came up) or a failure may have passed (it dropped mid-tile). Returns
+ * how many.
+ */
+int  mapview_redo(mapview_t *v, bool nodata_too);
+
 /* Tiles still to render. */
 int  mapview_pending(const mapview_t *v);
 

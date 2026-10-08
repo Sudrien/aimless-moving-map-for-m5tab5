@@ -1,0 +1,27 @@
+menu "Aimless Moving Map"
+
+    config AIMLESS_TILE_BASE
+        string "Where remote tiles come from"
+        default "https://build.protomaps.com/"
+        help
+            The directory the remote PMTiles archive is in, ending in a
+            slash; the archive's name is appended. src: the original's
+            TILE_BASE.
+
+            The default is Protomaps' own build bucket. They ask that it
+            not be hotlinked and say its URLs may move: fine for trying
+            this, and the reason it is a setting. Any host that answers
+            HTTP range requests works -- your own copy on R2, S3, or a
+            server at home.
+
+    config AIMLESS_PINNED_BUILD
+        string "Pinned build (empty: newest daily)"
+        default ""
+        help
+            An archive name without ".pmtiles" to use as it is, with no
+            date probing -- the only sensible setting when the base is
+            your own storage. Empty: probe backwards from today's date for
+            the newest Protomaps daily build, as the original does.
+            src: the original's PINNED_BUILD.
+
+endmenu

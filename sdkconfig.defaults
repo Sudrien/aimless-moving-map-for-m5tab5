@@ -22,8 +22,9 @@ CONFIG_CACHE_L2_CACHE_LINE_128B=y
 
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_FREERTOS_HZ=1000
-# app_main renders tiles; the decoder and rasteriser keep their scratch on
-# the heap, but the call chain is deep.
+# app_main draws; the render task (aimless.c RENDER_STACK) renders. The
+# decoder and rasteriser keep their scratch on the heap, but the call
+# chain is deep, and app_main rendered in milestone 1.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
 # The Ark12 font table is large; the default 1 MB app partition is not.
@@ -38,3 +39,30 @@ CONFIG_FATFS_API_ENCODING_UTF_8=y
 # Without fast seek every f_lseek() on a large archive walks the FAT chain:
 # about 500 ms a seek, measured by the original (its bigfile.cpp).
 CONFIG_FATFS_USE_FASTSEEK=y
+
+# ---------------------------------------------------------------------------
+# THE NETWORK (0009). Each of these is the player's, for the reason its
+# sdkconfig.defaults gives at length; feckless-network-handler's README
+# names the first three as the ones wifi_init() depends on.
+#
+# wifi.c powers the C6 through the expander and calls esp_hosted_init()
+# itself; a pre-main init would find the module unpowered.
+CONFIG_ESP_HOSTED_AUTO_CALL_INIT_BEFORE_APP_MAIN=n
+# The board preset, and the C6's EN on GPIO15, which the port reads from
+# Kconfig only.
+CONFIG_ESP32P4_TAB5_C6_BOARD=y
+CONFIG_ESP_HOSTED_HOST_RESET_GPIO=15
+# The C6's firmware sends streaming-framed reads (it reports 0.0.0).
+CONFIG_ESP_HOSTED_HOST_SDIO_RX_STREAMING_MODE=y
+# CONFIG_ESP_HOSTED_HOST_SDIO_RX_MAX_SIZE is not set
+# wifi.c asks for three NIST servers; the array is sized by this.
+CONFIG_LWIP_SNTP_MAX_SERVERS=3
+# TLS, lwIP and the transport's staging buffers out of internal RAM,
+# which the player ran short of with one TLS session up.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_LWIP_L2_TO_L3_COPY=y
+CONFIG_EH_HOST_PORT_DMA_PREFER_SPIRAM=y
+# HTTPS to the tile host: IDF's certificate bundle. On by default; written
+# down because netremote.c attaches it.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y

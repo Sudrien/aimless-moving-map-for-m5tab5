@@ -10,10 +10,15 @@ does.
 ```
   gnss task (core 0, prio 5)       app_main loop
   UART1 -> nmea.h -> fix  ------>  follow the fix (mapview_centre)
-  PPS on GPIO51                    render one queued tile (mapview_step)
-                                     mapset -> maptile -> mapcore
-                                   compose the window, marker, status
+  PPS on GPIO51                    compose the window, marker, status
                                    blit (gfx, landscape)
+                                        |  s_lock around the view
+  render task (core 1, prio 4)          |
+  netremote_update: online? build?      |
+  take the nearest job  <---------------+
+  tilesrc: cache -> card -> network
+    maptile -> mapcore
+  commit
 ```
 
 - **mapcore** (`components/mapcore/`): the original's portable C, byte
@@ -28,22 +33,23 @@ does.
   cache, the card, the network. The original's netsource_get().
 - **tilecache** (`main/tilecache.c`): tiles fetched over the network,
   kept on the card. The original's tilecache.cpp.
+- **netremote** (`main/netremote.c`): the remote archive over HTTP range
+  requests, which build, and its cache. The network half of the
+  original's netsource.cpp.
 - **gnss** (`main/gnss.c`, `main/nmea.h`): the M135.
 - **ffread** (`main/ffread.c`): a file read through FatFs directly.
 - **aimless** (`main/aimless.c`): boot, the loop, the drawing.
 
-Everything but gnss.c, ffread.c and aimless.c is free of ESP-IDF and
+Everything but gnss.c, ffread.c, netremote.c and aimless.c is free of ESP-IDF and
 tested by `make -C test`.
 
 ## Milestones
 
-1. **Offline map and position.** This.
-2. **Tiles over Wi-Fi**, through feckless-network-handler: the
+1. **Offline map and position.** 0005.
+2. **Tiles over the network**, through feckless-network-handler: the
    original's netsource and tile cache, so the map works where the card
-   has nothing. The render moves to its own task on core 1 then, as the
-   original's worker is, because a network fetch must not hold the
-   screen; saved networks either migrate from the original's NVS format
-   or start fresh -- an open question.
+   has nothing, and the render on its own task on core 1. Saved
+   networks are defeatist's (0007, 0009). 0008 and 0009.
 3. **The rest**: labels and place names, zoom levels, the compass,
    waypoints, the setup portal, Wi-Fi location, AssistNow Autonomous,
    the world map floor, the night palette, exFAT for planet-sized files.
@@ -165,3 +171,55 @@ so a payload from the cache or the network draws the same way.
 build, here so the test reaches it before the code that uses it. And
 mapview takes a draw callback instead of the archive set, plus a
 take/commit pair for the render worker to come.
+
+### 0009 -- the network
+
+Milestone 2's second half: tiles over Wi-Fi or a USB Ethernet cable,
+and the render on its own task.
+
+**Saved networks are defeatist's.** feckless-network-handler's wifistore,
+read from the "defeatist" NVS namespace, which 0007 put where defeatist
+keeps it: a network joined in the player is joined here. There is no
+way to add one in this program yet -- that is the setup portal,
+milestone 3. With none saved the radio stays off; a cable works anyway.
+
+**The remote archive** is an ordinary maparchive_t whose read callback
+is an HTTP range request (netremote.c), so the PMTiles reader is the
+card's. The original's rules for the connection, kept: one socket held
+between requests; it survives only a request that came back exactly as
+asked (206, the right length, every byte read), since unread bytes in a
+reused socket are the next reply; a failure on a reused socket is tried
+once more on a fresh one; 150 ms between requests; ranges in 32 KB
+pieces. Not kept: the original's memo of the last blob, which was for
+the world-floor walk (milestone 3).
+
+**Which build**: `AIMLESS_PINNED_BUILD` if set, else the newest daily
+found by probing back up to 8 days from today's date -- from the fix's
+RMC date or from SNTP, whichever comes first. Recorded in `/t/build.txt`
+on the card and probed for again after 30 days; a new build removes the
+old cache. `AIMLESS_TILE_BASE` is where; both are in menuconfig under
+"Aimless Moving Map".
+
+**The render task** is pinned to core 1 (the original's worker was), so
+a network fetch never holds up the screen. It takes a job under a lock,
+draws without it, and commits under it again; tile_grid.c's generation
+check refuses a commit the grid has moved past. When the network
+appears, every tile that had no data is queued again; tiles that failed
+are queued again every 30 s.
+
+**Without maps on the card** the program no longer stops: it says so
+and waits for a network and a fix.
+
+sdkconfig.defaults gains the player's esp_hosted and memory lines (rm
+sdkconfig). The manifest gains feckless_network_handler v0.1.0, which
+brings esp_hosted and the rest: read the lock diff.
+
+On the board: "N saved networks", the network library's join lines,
+"probing build YYYYMMDD: ok", "remote build ... open", "network up: N
+tiles to try again", "tile z/x/y in N ms from network", and every ten
+seconds a "net ..." line with the route, the build and the counts. The
+render task logs its unused stack every 16 tiles.
+
+`builddate.h`'s bd_name() needed the same room for GCC's
+format-truncation check as 0006: the IDF build is the first to compile
+it.

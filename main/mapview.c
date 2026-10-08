@@ -82,6 +82,21 @@ void mapview_centre(mapview_t *v, double lat, double lon)
 
 int mapview_pending(const mapview_t *v) { return v->njobs; }
 
+int mapview_redo(mapview_t *v, bool nodata_too)
+{
+    if (!v->grid.initialised) return 0;
+    int n = 0;
+    for (int i = 0; i < GRID_COUNT; i++) {
+        subtile_t *s = &v->grid.slots[i];
+        if (s->state == TILE_ERROR || (nodata_too && s->state == TILE_NODATA)) {
+            s->state = TILE_PENDING;
+            n++;
+        }
+    }
+    if (n) requeue(v);
+    return n;
+}
+
 bool mapview_take(mapview_t *v, render_job_t *job, uint16_t **px)
 {
     if (v->njobs == 0) return false;
