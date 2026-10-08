@@ -93,7 +93,7 @@ static void scan_volume(storage_id_t id)
 {
     const int drv = storage_ff_drive(id);
     if (drv < 0) return;
-    char root[8];
+    char root[16];   /* "%d:/" for any int: GCC checks the full range */
     snprintf(root, sizeof(root), "%d:/", drv);
     FF_DIR d;
     FILINFO fi;

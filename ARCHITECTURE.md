@@ -119,3 +119,8 @@ Not built against ESP-IDF here. aimless.c, gnss.c and ffread.c were
 type-checked on the host against stub headers only. On the board, look
 for the banner, a line per archive found, "first fix after N ms", and
 "tile in N ms" for each tile.
+
+### 0006 -- scan_volume's root path buffer
+
+The first IDF build: `-Wformat-truncation` is an error there, and GCC
+sizes `"%d:/"` for any int. The buffer is 16 bytes.
