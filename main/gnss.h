@@ -4,19 +4,16 @@
  * original/gnss.cpp on ESP-IDF's UART driver instead of Arduino's
  * Serial1: a task reads the module, nmea.h parses each line into a
  * private fix, and the whole fix is published under a lock. The PPS line
- * is edge-counted in an interrupt. UBX is sent for the measurement rate.
- *
- * Not ported yet, and why:
- *   gnss_enable_aop(), gnss_dbd_read(), gnss_dbd_write() -- AssistNow
- *   Autonomous and saving the navigation database across power-off.
- *   They are a warm-start optimisation that needs the card and the UBX
- *   capture machinery; milestone 3 (ARCHITECTURE.md).
+ * is edge-counted in an interrupt. UBX is sent for the measurement rate,
+ * and for AssistNow Autonomous (0028): ubx.c frames and captures it,
+ * aop.h is what it is for.
  *
  * SPDX-License-Identifier: MIT
  */
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "nmea.h"
@@ -53,6 +50,23 @@ uint32_t gnss_first_fine_ms(void);
 /* One solution every `ms`, 200..10000 (UBX-CFG-RATE). */
 bool     gnss_set_rate_ms(uint16_t ms);
 uint16_t gnss_rate_ms(void);
+
+/* When gnss_start() opened the UART, in ms since boot: what time to first
+ * fix is measured from (the original measured from the receiver's power,
+ * which here is the same moment to within the UART's setup). */
+uint32_t gnss_start_ms(void);
+
+/* AssistNow Autonomous (0028; aop.h). original/gnss.h's three.
+ *
+ * Turn it on, with ack-aiding, which ends a database poll; once, after
+ * gnss_start(). Blocks up to 1.5 s for the receiver's reply. */
+bool   gnss_enable_aop(void);
+/* Poll the navigation database into `dst`: whole UBX frames, their
+ * length, 0 on failure. Blocks up to 8 s. */
+size_t gnss_dbd_read(uint8_t *dst, size_t cap);
+/* Push a saved database back, its good frames spaced as u-blox ask.
+ * False if there was nothing in it to push. */
+bool   gnss_dbd_write(const uint8_t *src, size_t len);
 
 uint32_t gnss_sentences(void);
 uint32_t gnss_pps_count(void);

@@ -33,6 +33,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <time.h>
@@ -79,6 +80,7 @@
 #include "worldtile.h"
 #include "lastfix.h"
 #include "area.h"
+#include "aop.h"
 #include "mercator.h"
 
 static const char *TAG = "aimless";
@@ -580,6 +582,154 @@ static void lastfix_keep(const gnss_fix_t *fix)
     /* Every time: FatFs resets a file's attributes when it is opened for
      * writing over. */
     storage_mark_hidden(LASTFIX_PATH);
+}
+
+/* ---- AssistNow Autonomous (0028) ---- */
+
+/* The original's AOP_PATH was /aopdb.bin; this name for the reasons
+ * WP_PATH gives (0022, 0023). */
+#define AOP_PATH    STORAGE_SD_MOUNT "/.aimless.aopdb.dat"
+#define AOP_TMP     STORAGE_SD_MOUNT "/.aimless.aopdb.tmp"
+#define AOP_OLD     STORAGE_SD_MOUNT "/aopdb.bin"       /* the original's */
+/* src: original aopSaveTask(), 8192 with Arduino's Print in it; the
+ * buffers here are on the heap and this calls stdio and the UART. */
+#define AOP_STACK   (4096)
+
+static volatile bool s_aop_busy;
+static volatile bool s_aop_pushed;      /* a database went in this boot */
+static volatile int  s_aop_age_h = -1;  /* its age, whole hours; -1 unknown */
+static uint32_t      s_aop_saved_ms;
+static int64_t       s_aop_utc;         /* the time to stamp the next save */
+
+/* Push the saved database back, if it is fresh enough
+ * (original aopRestore()). */
+static void aop_restore(void)
+{
+    file_adopt(AOP_OLD, AOP_PATH);
+    FILE *f = fopen(AOP_PATH, "rb");
+    if (!f) { ESP_LOGI(TAG, "aop: no saved database"); return; }
+    uint8_t head[AOP_HEAD_BYTES];
+    uint32_t bytes;
+    int64_t written;
+    if (fread(head, 1, sizeof(head), f) != sizeof(head) ||
+        !aop_head_decode(head, sizeof(head), &bytes, &written)) {
+        ESP_LOGW(TAG, "aop: saved database not recognised; not using it");
+        fclose(f);
+        return;
+    }
+    /* The clock is rarely set this early -- no fix, no SNTP yet -- so
+     * this is usually "age unknown", and pushed anyway, as the original
+     * did: the receiver checks what it is given. */
+    double age_h;
+    const aop_age_t age = aop_age(written, wifi_ntp_synced() ? (int64_t)time(NULL) : 0, &age_h);
+    if (age == AOP_STALE) {
+        ESP_LOGI(TAG, "aop: saved database is %.1f h old, past %d h; not using it",
+                 age_h, AOP_MAX_AGE_H);
+        fclose(f);
+        return;
+    }
+    uint8_t *buf = malloc(bytes);
+    const bool ok = buf && fread(buf, 1, bytes, f) == bytes;
+    fclose(f);
+    if (ok) {
+        if (age == AOP_FRESH)
+            ESP_LOGI(TAG, "aop: saved database %.1f h old, %u bytes", age_h, (unsigned)bytes);
+        else
+            ESP_LOGI(TAG, "aop: saved database %u bytes, age unknown", (unsigned)bytes);
+        if (gnss_dbd_write(buf, bytes)) {
+            s_aop_age_h = age == AOP_FRESH ? (int)age_h : -1;
+            s_aop_pushed = true;
+        }
+    } else {
+        ESP_LOGW(TAG, "aop: saved database unreadable");
+    }
+    free(buf);
+}
+
+/* At boot, on its own task, so the receiver's 1.5 s to answer and the
+ * push do not hold up the screen. In this order deliberately (original
+ * setup()): ack-aiding is set with AOP and the push wants it, and
+ * assistance is worth most before the search has got far. */
+static void aop_boot_task(void *arg)
+{
+    (void)arg;
+    /* src: original setup(): let the module finish talking after reset. */
+    vTaskDelay(pdMS_TO_TICKS(200));
+    gnss_enable_aop();
+    aop_restore();
+    vTaskDelete(NULL);
+}
+
+/* Poll the database and write it, to a second file renamed over the
+ * first so a cut write cannot leave half a database that looks whole
+ * (original aopSave()). On its own task: the poll can take 8 s. */
+static void aop_save_task(void *arg)
+{
+    (void)arg;
+    uint8_t *buf = malloc(AOP_CAP);
+    const size_t n = buf ? gnss_dbd_read(buf, AOP_CAP) : 0;
+    bool ok = false;
+    if (n) {
+        uint8_t head[AOP_HEAD_BYTES];
+        aop_head_encode((uint32_t)n, s_aop_utc, head);
+        FILE *f = fopen(AOP_TMP, "wb");
+        if (f) {
+            ok = fwrite(head, 1, sizeof(head), f) == sizeof(head) && fwrite(buf, 1, n, f) == n;
+            if (fclose(f) != 0) ok = false;
+            if (ok) {
+                remove(AOP_PATH);       /* FatFs will not rename over a file */
+                ok = rename(AOP_TMP, AOP_PATH) == 0;
+                if (ok) storage_mark_hidden(AOP_PATH);
+            } else {
+                remove(AOP_TMP);
+            }
+        }
+        ESP_LOGI(TAG, "aop: %s database, %u bytes", ok ? "saved" : "could not save", (unsigned)n);
+    }
+    free(buf);
+    s_aop_busy = false;
+    vTaskDelete(NULL);
+}
+
+static void aop_keep(const gnss_fix_t *fix)
+{
+    const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    if (!aop_save_due(gnss_fine(fix), s_aop_busy, now, s_aop_saved_ms)) return;
+    /* Stamped before the attempt, so a receiver that never answers is
+     * asked again in thirty minutes, not on the next turn of the loop. */
+    s_aop_saved_ms = now ? now : 1;
+    s_aop_utc = utc_now(fix);
+    s_aop_busy = true;
+    /* src: original aopMaintain(): low priority on the reader's core; the
+     * reader must keep draining the UART for the poll to see anything. */
+    if (xTaskCreatePinnedToCore(aop_save_task, "aopsave", AOP_STACK, NULL, 1, NULL, 0) != pdPASS) {
+        s_aop_busy = false;
+        ESP_LOGW(TAG, "aop: could not start the save");
+    }
+}
+
+/* Time to first fix from when the receiver was started, with what
+ * assistance went in -- a TTFF means nothing without knowing which case
+ * produced it (original ttffReport()). */
+static void ttff_report(const gnss_fix_t *fix)
+{
+    static bool coarse, fine;
+    if (fine) return;
+    const uint32_t t0 = gnss_start_ms();
+    char how[40];
+    if (!s_aop_pushed) snprintf(how, sizeof(how), "no assistance");
+    else if (s_aop_age_h < 0) snprintf(how, sizeof(how), "assisted, age unknown");
+    else snprintf(how, sizeof(how), "assisted, %d h old", (int)s_aop_age_h);
+    if (!coarse && gnss_coarse(fix)) {
+        coarse = true;
+        ESP_LOGI(TAG, "first fix %.1f s after the receiver started (%s), %d sats",
+                 (double)(int32_t)(gnss_first_coarse_ms() - t0) / 1000.0, how, fix->sats);
+    }
+    if (coarse && gnss_fine(fix)) {
+        fine = true;
+        ESP_LOGI(TAG, "3D fix, HDOP %.1f, %.1f s after the receiver started (%s)", fix->hdop,
+                 (double)(int32_t)(gnss_first_fine_ms() - t0) / 1000.0, how);
+    }
 }
 
 /* ---- the button row and the settings panel (0016) ---- */
@@ -1732,6 +1882,8 @@ void app_main(void)
     /* The receiver searches while everything else comes up. */
     if (!gnss_start(GNSS_P4_RX_PIN, GNSS_P4_TX_PIN, GNSS_BAUD, GNSS_PPS_PIN, 0, 5))
         ESP_LOGE(TAG, "GNSS did not start");
+    else if (xTaskCreatePinnedToCore(aop_boot_task, "aop", AOP_STACK, NULL, 1, NULL, 0) != pdPASS)
+        ESP_LOGW(TAG, "aop: could not start; a cold start, as without it");
 
     /* The two seconds to ask for Wi-Fi setup, while the receiver and a
      * USB drive come up anyway. Before the radio is asked for, so the
@@ -1812,14 +1964,9 @@ void app_main(void)
 
     gnss_fix_t fix;
     int64_t last_draw = 0, last_log = 0;
-    bool had_fix = false;
     for (;;) {
         gnss_get(&fix);
         if (gnss_coarse(&fix)) {
-            if (!had_fix) {
-                ESP_LOGI(TAG, "first fix after %u ms", (unsigned)gnss_first_coarse_ms());
-                had_fix = true;
-            }
             const merc_pt_t p = merc_from_ll(fix.lat, fix.lon, VIEW_ZOOM);
             s_mark_x = p.x;
             s_mark_y = p.y;
@@ -1839,6 +1986,8 @@ void app_main(void)
         setup_step();
         ui_touch(&fix);
         lastfix_keep(&fix);
+        ttff_report(&fix);
+        aop_keep(&fix);
 
         const int64_t now = esp_timer_get_time();
         if (s_dirty || now - last_draw >= 1000000) {

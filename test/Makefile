@@ -36,6 +36,10 @@
 #
 # areatest: main/area.c, the area cache's walk, against the fixture.
 #
+# aoptest: main/ubx.c and main/aop.c, AssistNow Autonomous -- UBX frames
+# picked out of an NMEA stream, captured and walked, and the original's
+# /aopdb.bin.
+#
 # -fno-sanitize=shift: raster.c converts to fixed point with
 # `v << RS_FRAC_BITS` on signed values that can be negative (geometry
 # outside the tile). That is undefined in C11 and does the arithmetic
@@ -56,7 +60,7 @@ LDFLAGS := -fsanitize=address,undefined -fno-sanitize=shift -lm
 CORE_SRCS := $(CORE)/src/inflate.c $(CORE)/src/mvt.c $(CORE)/src/pmtiles.c \
              $(CORE)/src/raster.c $(CORE)/src/style.c $(CORE)/src/tile_grid.c
 
-all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area
+all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop
 
 maptiletest: maptiletest.c ../main/maptile.c ../main/maptile.h $(CORE_SRCS) fixture.pmtiles
 	$(CC) $(CFLAGS) -o $@ maptiletest.c ../main/maptile.c $(CORE_SRCS) $(LDFLAGS)
@@ -137,7 +141,13 @@ areatest: areatest.c ../main/area.c ../main/area.h ../main/mapset.c ../main/mapt
 run-area: areatest
 	cd $(CURDIR) && ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./areatest
 
-clean:
-	rm -f areatest lastfixtest maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest suntest uirowtest waypointstest worldtiletest worldtile.bin
+aoptest: aoptest.c ../main/ubx.c ../main/ubx.h ../main/aop.c ../main/aop.h
+	$(CC) $(CFLAGS) -o $@ aoptest.c ../main/ubx.c ../main/aop.c $(LDFLAGS)
 
-.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area clean
+run-aop: aoptest
+	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./aoptest
+
+clean:
+	rm -f areatest lastfixtest maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest suntest uirowtest waypointstest worldtiletest worldtile.bin aoptest
+
+.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop clean

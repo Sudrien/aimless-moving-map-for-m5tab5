@@ -769,3 +769,52 @@ fetch as an error.
 
 Host: tilesrctest one more. Device: aimless.c and tilesrc.c compiled
 with -c at -Og, -Os and -O2 for the P4; not built.
+
+### 0028 -- AssistNow Autonomous
+
+The original's faster start. The receiver predicts satellite orbits
+from ephemeris it has received itself, good for about three days; no
+server, no token, no network. The predictions live in its battery-backed
+RAM, which the supercap holds for hours, so they are polled out
+(UBX-MGA-DBD), kept on the card, and pushed back at the next boot.
+
+**ubx.c** is original/gnss.cpp's UBX machinery as C with no UART in it,
+host-tested: framing, a byte-at-a-time parser that takes frames out of
+the NMEA stream (it replaces 0004's ubx_skip()), a capture that collects
+the frames an exchange waits for until its terminating frame, and a walk
+of saved frames. One departure: checksums are checked. The original
+never did, so a frame corrupted on the wire would have been saved, and
+pushed into the receiver at every boot for three days.
+
+**aop.c** is the rest without a file in it: the CFG-NAVX5 edit that turns
+on AOP and ack-aiding (mask1 0x4400 -- both bits, as the original found
+the hard way), the original's /aopdb.bin header ("AOP1", byte count,
+time written), whether a saved database is fresh (72 h), and when to
+save (a good fix; five minutes after boot, then every thirty).
+
+**gnss.c** owns the wire: gnss_enable_aop(), gnss_dbd_read() and
+gnss_dbd_write(), with ubx_exchange() as the original's -- send, let the
+reader task collect, stop on the terminating frame, a timeout, or quiet
+after the first frame. Records go back 7 ms apart, u-blox's spacing.
+
+**aimless.c**: at boot, a task turns AOP on and pushes the saved
+database, so the receiver's 1.5 s to answer does not hold up the
+screen. The clock is rarely set that early, so the age is usually
+unknown and it is pushed anyway, as the original did: the receiver
+checks what it is given. Saving runs on a task of its own, as in the
+original, stamped with the fix's own UTC. The file is
+.aimless.aopdb.dat, hidden, the original's aopdb.bin renamed to it on
+first read (0022, 0023).
+
+And the original's time-to-first-fix line, which 0004 only half ported:
+measured from when the receiver was started, not from boot, and saying
+what assistance went in -- a TTFF means nothing without knowing which
+case produced it -- with a second line for the first good 3D fix.
+
+Host: aoptest (46 checks). Device: every main/*.c compiled with -c at
+-Og, -Os and -O2 for the P4; not built, and not run against a receiver.
+On the board: "AssistNow Autonomous on (NAVX5 vN, N bytes)", then "aop:
+no saved database" on the first boot; after five minutes of good fix,
+"navigation database: N records, N bytes" and "aop: saved database";
+on the next boot, "navigation database pushed" and a first-fix line
+saying "assisted".

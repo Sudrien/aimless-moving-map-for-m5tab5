@@ -40,7 +40,7 @@ endif()
 idf_component_register(
     SRCS "aimless.c" "gnss.c" "ffread.c" "maptile.c" "mapset.c" "mapview.c" "tilecache.c" "tilesrc.c" "netremote.c"
          "portal.c" "portalweb.c" "dnsreply.c" "wifijoin.c" "launcher_import.c" "launcherkey.c"
-         "sun.c" "uirow.c" "waypoints.c" "worldtile.c" "lastfix.c" "area.c"
+         "sun.c" "uirow.c" "waypoints.c" "worldtile.c" "lastfix.c" "area.c" "ubx.c" "aop.c"
     INCLUDE_DIRS "."
     EMBED_FILES "${AIMLESS_WORLD}"
     REQUIRES mapcore feckless_drivers feckless_graphics_handler feckless_storage_handler feckless_network_handler

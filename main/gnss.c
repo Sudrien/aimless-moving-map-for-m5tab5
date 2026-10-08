@@ -6,6 +6,9 @@
 
 #include "gnss.h"
 
+#include "aop.h"
+#include "ubx.h"
+
 #include <string.h>
 
 #include "driver/gpio.h"
@@ -48,30 +51,14 @@ static void IRAM_ATTR pps_isr(void *arg)
 }
 
 /*
- * UBX frames are skipped. The original captured them for the AssistNow
- * calls, which are not ported (gnss.h); what is kept is recognising one,
- * so that a binary reply never lands in the NMEA line buffer. Returns
- * true while the byte belongs to a UBX frame. As original/gnss.cpp
- * ubx_feed(), without the capture.
+ * UBX arrives in the middle of the NMEA stream; ubx.c recognises it, so a
+ * binary reply never lands in the line buffer, and hands each complete
+ * frame to whatever exchange is waiting for one (0028).
  */
-static bool ubx_skip(uint8_t c)
-{
-    static int st;
-    static uint16_t len, got;
-    switch (st) {
-    case 0: if (c == 0xB5) { st = 1; return true; } return false;
-    case 1: if (c == 0x62) { st = 2; return true; } st = 0; return false;
-    case 2: st = 3; return true;                            /* class */
-    case 3: st = 4; return true;                            /* id */
-    case 4: len = c; st = 5; return true;
-    case 5: len |= (uint16_t)c << 8; got = 0; st = len ? 6 : 7; return true;
-    case 6: if (++got >= len) st = 7; return true;
-    case 7: st = 8; return true;                            /* checksum A */
-    case 8: st = 0; return true;                            /* checksum B */
-    }
-    st = 0;
-    return false;
-}
+static ubx_parser_t s_ubx;
+static ubx_capture_t *volatile s_cap;  /* set by ubx_exchange(), under s_ubx_lock */
+static SemaphoreHandle_t s_ubx_lock;    /* one exchange at a time */
+static uint32_t s_start_ms;
 
 static void gnss_task(void *arg)
 {
@@ -85,7 +72,9 @@ static void gnss_task(void *arg)
         const int n = uart_read_bytes(GNSS_UART, rx, sizeof(rx), pdMS_TO_TICKS(20));
         for (int i = 0; i < n; i++) {
             const char c = (char)rx[i];
-            if (ubx_skip((uint8_t)c)) continue;
+            const ubx_byte_t u = ubx_feed(&s_ubx, (uint8_t)c);
+            if (u == UBX_FRAME) ubx_capture_offer(s_cap, s_ubx.frame, s_ubx.flen, now_ms());
+            if (u != UBX_NOT) continue;
             if (c == '\n') {
                 line[pos] = 0;
                 const uint32_t t = now_ms();
@@ -105,14 +94,10 @@ static void gnss_task(void *arg)
 
 static void ubx_send(uint8_t cls, uint8_t id, const uint8_t *payload, uint16_t len)
 {
-    uint8_t frame[6 + 64 + 2];
-    if (len > 64) return;
-    frame[0] = 0xB5; frame[1] = 0x62;
-    frame[2] = cls;  frame[3] = id;
-    frame[4] = (uint8_t)(len & 0xFF); frame[5] = (uint8_t)(len >> 8);
-    if (len) memcpy(frame + 6, payload, len);
-    ubx_checksum(frame + 2, 4u + len, &frame[6 + len], &frame[7 + len]);
-    uart_write_bytes(GNSS_UART, frame, 8u + len);
+    uint8_t frame[UBX_OVERHEAD + 64];
+    const size_t n = ubx_frame(cls, id, payload, len, frame, sizeof(frame));
+    if (!n) return;
+    uart_write_bytes(GNSS_UART, frame, n);
     uart_wait_tx_done(GNSS_UART, pdMS_TO_TICKS(100));
 }
 
@@ -120,7 +105,10 @@ bool gnss_start(int rx_pin, int tx_pin, uint32_t baud, int pps_pin,
                 int core, int priority)
 {
     s_lock = xSemaphoreCreateMutex();
-    if (!s_lock) return false;
+    s_ubx_lock = xSemaphoreCreateMutex();
+    if (!s_lock || !s_ubx_lock) return false;
+    ubx_parser_init(&s_ubx);
+    s_start_ms = now_ms();
     gnss_fix_init(&s_pub);
     s_pub.last_sentence_ms = now_ms();
 
@@ -192,3 +180,108 @@ uint32_t gnss_first_fine_ms(void)   { return s_first_fine_ms; }
 uint32_t gnss_sentences(void)       { return s_sentences; }
 uint32_t gnss_pps_count(void)       { return s_pps_count; }
 uint32_t gnss_pps_interval(void)    { return s_pps_interval; }
+uint32_t gnss_start_ms(void)         { return s_start_ms; }
+
+/* ---- AssistNow Autonomous (0028) ---- */
+
+/* src: u-blox M8 protocol specification (UBX-13003221), "UBX Class IDs"
+ * and the message sections; the same in the M9/M10 documents.
+ * original/gnss.cpp's names. */
+#define UBX_CLS_CFG     (0x06)
+#define UBX_ID_NAVX5    (0x23)      /* UBX-CFG-NAVX5, the AOP enable */
+#define UBX_CLS_MGA     (0x13)
+#define UBX_ID_DBD      (0x80)      /* UBX-MGA-DBD, the navigation database */
+#define UBX_ID_MGA_ACK  (0x60)      /* UBX-MGA-ACK, which ends a DBD poll */
+
+/*
+ * Send a poll and collect the frames `c` asks for, until its terminating
+ * frame, `timeout_ms`, or `idle_ms` of quiet after the first one -- so a
+ * receiver with ack-aiding off still finishes rather than burning the
+ * whole timeout (original ubx_exchange()). The reader task does the
+ * collecting; it is the only thing draining the UART.
+ */
+static bool ubx_exchange(uint8_t cls, uint8_t id, ubx_capture_t *c,
+                         uint32_t timeout_ms, uint32_t idle_ms)
+{
+    if (!s_ubx_lock || xSemaphoreTake(s_ubx_lock, pdMS_TO_TICKS(2000)) != pdTRUE)
+        return false;
+    c->len = 0;
+    c->frames = 0;
+    c->done = false;
+    c->last_ms = now_ms();
+    s_cap = c;
+    ubx_send(cls, id, NULL, 0);
+    const uint32_t t0 = now_ms();
+    while (!c->done && now_ms() - t0 < timeout_ms) {
+        if (c->frames && idle_ms && now_ms() - c->last_ms > idle_ms) break;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    s_cap = NULL;
+    /* The reader may still be inside ubx_capture_offer() with the old
+     * pointer. The captures are static, so that is never a dangling one;
+     * this is so it is out before the next exchange resets it. */
+    vTaskDelay(pdMS_TO_TICKS(30));
+    xSemaphoreGive(s_ubx_lock);
+    return c->frames > 0 || c->done;
+}
+
+bool gnss_enable_aop(void)
+{
+    static uint8_t buf[128];    /* the reply frame: 44 bytes of payload at most */
+    static ubx_capture_t c;     /* static: the reader holds a pointer to it */
+    c = (ubx_capture_t){ .cls = UBX_CLS_CFG, .id = UBX_ID_NAVX5,
+                        .ack_cls = 0xFF, .ack_id = 0xFF,
+                        .buf = buf, .cap = sizeof(buf) };
+    /* src: original gnss_enable_aop(): 1.5 s for the reply, done 250 ms
+     * after it. */
+    if (!ubx_exchange(UBX_CLS_CFG, UBX_ID_NAVX5, &c, 1500, 250)) {
+        ESP_LOGW(TAG, "CFG-NAVX5 poll got no reply; no AssistNow Autonomous");
+        return false;
+    }
+    const uint16_t plen = (uint16_t)(buf[4] | (uint16_t)buf[5] << 8);
+    uint8_t *p = buf + UBX_HEAD;
+    if (c.len < (size_t)plen + UBX_OVERHEAD || !aop_navx5_edit(p, plen)) {
+        ESP_LOGW(TAG, "CFG-NAVX5 reply too short (%u bytes)", (unsigned)c.len);
+        return false;
+    }
+    ubx_send(UBX_CLS_CFG, UBX_ID_NAVX5, p, plen);
+    ESP_LOGI(TAG, "AssistNow Autonomous on (NAVX5 v%u, %u bytes)", (unsigned)p[0], (unsigned)plen);
+    return true;
+}
+
+size_t gnss_dbd_read(uint8_t *dst, size_t cap)
+{
+    static ubx_capture_t c;
+    c = (ubx_capture_t){ .cls = UBX_CLS_MGA, .id = UBX_ID_DBD,
+                        .ack_cls = UBX_CLS_MGA, .ack_id = UBX_ID_MGA_ACK,
+                        .buf = dst, .cap = cap };
+    /* src: original gnss_dbd_read(): 8 s, done 500 ms after the last
+     * record if the MGA-ACK never comes. */
+    if (!ubx_exchange(UBX_CLS_MGA, UBX_ID_DBD, &c, 8000, 500)) return 0;
+    ESP_LOGI(TAG, "navigation database: %u records, %u bytes%s", (unsigned)c.frames,
+             (unsigned)c.len, c.done ? "" : " (no MGA-ACK; ended on quiet)");
+    return c.len;
+}
+
+bool gnss_dbd_write(const uint8_t *src, size_t len)
+{
+    int frames = 0;
+    const size_t good = ubx_frames(src, len, &frames);
+    if (!frames) return false;
+    if (!s_ubx_lock || xSemaphoreTake(s_ubx_lock, pdMS_TO_TICKS(2000)) != pdTRUE)
+        return false;
+    size_t off = 0;
+    while (off < good) {
+        const size_t flen = (size_t)(src[off + 4] | (size_t)src[off + 5] << 8) + UBX_OVERHEAD;
+        uart_write_bytes(GNSS_UART, src + off, flen);
+        uart_wait_tx_done(GNSS_UART, pdMS_TO_TICKS(100));
+        off += flen;
+        /* src: original gnss_dbd_write(), u-blox's reference spacing: the
+         * receiver drops assistance it is too busy to take. */
+        vTaskDelay(pdMS_TO_TICKS(7));
+    }
+    xSemaphoreGive(s_ubx_lock);
+    ESP_LOGI(TAG, "navigation database pushed: %d records, %u of %u bytes",
+             frames, (unsigned)good, (unsigned)len);
+    return true;
+}

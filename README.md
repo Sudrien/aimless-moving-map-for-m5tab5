@@ -61,14 +61,20 @@ What works:
 - The area cache: about 27 km square around you fetched onto the card
   ahead of time, before you leave coverage.
 
+- Faster fixes after power-off: the receiver's own orbit predictions
+  (AssistNow Autonomous -- no server, no network) are saved to the card
+  every half hour with a good fix and pushed back at boot, for up to
+  three days. The very first start, with nothing saved, is not helped.
+
 Not yet: labels and place names. See `ARCHITECTURE.md`.
 
 What this keeps on the card is hidden, as Defeatist's is: dotted names
 with the FAT hidden attribute set, so they are not the first thing you
 see in the card's root on a computer -- `.aimless.waypoints.dat`,
-`.aimless.lastfix.dat`, and the tile cache in `.aimless.tiles/`. None
+`.aimless.lastfix.dat`, `.aimless.aopdb.dat`, and the tile cache in
+`.aimless.tiles/`. None
 ends in `.bin`, which M5Launcher would list as firmware to install. The
-original's `waypoints.bin`, `lastfix.bin` and `t/` are renamed to these
+original's `waypoints.bin`, `lastfix.bin`, `aopdb.bin` and `t/` are renamed to these
 the first time they are read, so their contents carry over.
 
 ## On the screen
