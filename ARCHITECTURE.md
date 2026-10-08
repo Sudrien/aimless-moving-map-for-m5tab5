@@ -652,3 +652,27 @@ original program no longer finds them under its names, which is the
 trade for a Launcher menu without them. Nothing else written to the
 card ends in .bin: the tile cache is <build>.dat and .idx, and
 build.txt.
+
+### 0023 -- hidden, as defeatist's are
+
+0022 kept .bin off the card; this hides what is there, the way
+defeatist does its .defeatist.dat and .defeatist.cat: a leading dot,
+and the FAT hidden attribute set through feckless-storage's
+storage_mark_hidden(), since a dot means nothing to Windows. Undotted
+files in the root are the first thing anyone sees on plugging the card
+into a computer.
+
+    waypoints.bin, then waypoints.dat   ->  .aimless.waypoints.dat
+    lastfix.bin, then lastfix.dat       ->  .aimless.lastfix.dat
+    t/ (the tile cache, with build.txt) ->  .aimless.tiles/
+
+Each older name is renamed to the new one on first read, if the new one
+is not there yet (file_adopt(), which hides what it renames), so saved
+points, the last position and cached tiles all carry over. The
+attribute is set after every write, not once: the saved points file is
+renamed over from .aimless.waypoints.tmp, and FatFs resets a file's
+attributes when it is opened for writing over, which is how lastfix is
+written. Hiding is advisory, as storage.h says: if it fails the file
+still works and is only visible.
+
+The original program will not find any of these under its own names.

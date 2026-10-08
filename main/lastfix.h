@@ -4,8 +4,8 @@
  *
  * The original's /lastfix.bin, byte for byte (original/tab5_map.cpp
  * lastFixSave() and lastFixLoad()), so a card that held one under it is
- * read here -- named lastfix.dat on the card since 0022, so M5Launcher
- * does not list it as firmware, and renamed from the original's name
+ * read here -- named .aimless.lastfix.dat on the card and hidden (0022,
+ * 0023), so M5Launcher does not list it as firmware, and renamed from the original's name
  * on first read: "LFX1" as a little-endian u32, the latitude and longitude as
  * floats, four bytes of padding, and the time written as an int64 (0 when
  * the clock was not set) -- 24 bytes, as the ESP32 laid out its struct.

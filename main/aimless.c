@@ -108,9 +108,12 @@ static const char *TAG = "aimless";
  * network joined there is joined here (0007 shares the partition). */
 #define NETS_NVS_NS     "defeatist"
 
-/* Where the network's tile cache lives: the original's /t, on the card.
- * src: original/tilecache.cpp CACHE_DIR. */
-#define CACHE_SUBDIR    "/t"
+/* Where the network's tile cache lives. The original's was /t
+ * (original/tilecache.cpp CACHE_DIR); dotted and hidden since 0023, as
+ * the other files this writes, and an existing /t is renamed to it so
+ * its tiles are kept. */
+#define CACHE_SUBDIR    "/.aimless.tiles"
+#define CACHE_OLD       "/t"
 
 /* The render task. src: original/mapengine.cpp's worker, pinned to
  * core 1 so a slow network fetch never holds up the screen or GNSS on
@@ -426,21 +429,29 @@ static void draw_setup(void)
 
 /* The original's WP_PATH was /waypoints.bin. Not .bin here (0022):
  * M5Launcher lists every .bin on the card as firmware to install, and
- * this runs under it. The contents are unchanged, and a card with the
- * original's file has it renamed on first read (file_adopt()). */
-#define WP_PATH     STORAGE_SD_MOUNT "/waypoints.dat"
-#define WP_OLD      STORAGE_SD_MOUNT "/waypoints.bin"
-#define WP_TMP      STORAGE_SD_MOUNT "/waypoints.tmp"
+ * this runs under it. And dotted and FAT-hidden (0023), as defeatist's
+ * .defeatist.dat: an undotted file in the root is the first thing anyone
+ * sees on plugging the card into a computer. Contents unchanged; the
+ * older names are renamed to this on first read (file_adopt()). */
+#define WP_PATH     STORAGE_SD_MOUNT "/.aimless.waypoints.dat"
+#define WP_TMP      STORAGE_SD_MOUNT "/.aimless.waypoints.tmp"
+#define WP_OLD      STORAGE_SD_MOUNT "/waypoints.bin"   /* the original's */
+#define WP_0022     STORAGE_SD_MOUNT "/waypoints.dat"   /* 0022's */
 
-/* If `path` is not on the card and the original's `old` is, rename the
- * one to the other: same bytes, a name M5Launcher will not offer to
- * flash (0022). */
+/* If `path` is not on the card and an older name `old` is, rename the
+ * one to the other -- same bytes, a name M5Launcher will not offer to
+ * flash -- and hide it (0022, 0023). A directory is adopted the same
+ * way. */
 static void file_adopt(const char *old, const char *path)
 {
     struct stat st;
     if (stat(path, &st) == 0 || stat(old, &st) != 0) return;
-    if (rename(old, path) == 0) ESP_LOGI(TAG, "renamed %s to %s", old, path);
-    else ESP_LOGW(TAG, "could not rename %s to %s", old, path);
+    if (rename(old, path) == 0) {
+        storage_mark_hidden(path);
+        ESP_LOGI(TAG, "renamed %s to %s", old, path);
+    } else {
+        ESP_LOGW(TAG, "could not rename %s to %s", old, path);
+    }
 }
 
 static uint8_t s_wp_file[WP_FILE_MAX];
@@ -449,6 +460,7 @@ static void wp_read(void)
 {
     wp_init(&s_wp);
     file_adopt(WP_OLD, WP_PATH);
+    file_adopt(WP_0022, WP_PATH);
     FILE *f = fopen(WP_PATH, "rb");
     if (!f) return;
     const size_t n = fread(s_wp_file, 1, sizeof(s_wp_file), f);
@@ -469,8 +481,13 @@ static void wp_write(void)
     const bool ok = fwrite(s_wp_file, 1, n, f) == n;
     if (fclose(f) != 0 || !ok) { ESP_LOGW(TAG, "saved points: write failed"); return; }
     remove(WP_PATH);
-    if (rename(WP_TMP, WP_PATH) != 0) ESP_LOGW(TAG, "saved points: rename failed");
-    else ESP_LOGI(TAG, "saved points: wrote %d", s_wp.n);
+    if (rename(WP_TMP, WP_PATH) != 0) {
+        ESP_LOGW(TAG, "saved points: rename failed");
+        return;
+    }
+    /* After the rename: the attribute goes with the name (storage.h). */
+    storage_mark_hidden(WP_PATH);
+    ESP_LOGI(TAG, "saved points: wrote %d", s_wp.n);
 }
 
 /* Seconds since 1970 from RMC's date and time, or the clock, for the
@@ -494,10 +511,11 @@ static int64_t utc_now(const gnss_fix_t *fix)
 
 /* ---- the last known position (0021) ---- */
 
-/* The original's LASTFIX_PATH was /lastfix.bin; .dat here for the
- * reason WP_PATH gives (0022). */
-#define LASTFIX_PATH    STORAGE_SD_MOUNT "/lastfix.dat"
-#define LASTFIX_OLD     STORAGE_SD_MOUNT "/lastfix.bin"
+/* The original's LASTFIX_PATH was /lastfix.bin; this name for the
+ * reasons WP_PATH gives (0022, 0023). */
+#define LASTFIX_PATH    STORAGE_SD_MOUNT "/.aimless.lastfix.dat"
+#define LASTFIX_OLD     STORAGE_SD_MOUNT "/lastfix.bin"     /* the original's */
+#define LASTFIX_0022    STORAGE_SD_MOUNT "/lastfix.dat"     /* 0022's */
 /* src: original/tab5_map.cpp: written on a good fix at most every ten
  * minutes -- a boot position does not need to be fresher, and the card
  * does not need the writes. */
@@ -506,6 +524,7 @@ static int64_t utc_now(const gnss_fix_t *fix)
 static bool lastfix_read(double *lat, double *lon)
 {
     file_adopt(LASTFIX_OLD, LASTFIX_PATH);
+    file_adopt(LASTFIX_0022, LASTFIX_PATH);
     FILE *f = fopen(LASTFIX_PATH, "rb");
     if (!f) return false;
     uint8_t b[LASTFIX_BYTES];
@@ -525,7 +544,13 @@ static void lastfix_keep(const gnss_fix_t *fix)
     FILE *f = fopen(LASTFIX_PATH, "wb");
     if (!f) return;
     const bool ok = fwrite(b, 1, sizeof(b), f) == sizeof(b);
-    if (fclose(f) != 0 || !ok) ESP_LOGW(TAG, "last position: write failed");
+    if (fclose(f) != 0 || !ok) {
+        ESP_LOGW(TAG, "last position: write failed");
+        return;
+    }
+    /* Every time: FatFs resets a file's attributes when it is opened for
+     * writing over. */
+    storage_mark_hidden(LASTFIX_PATH);
 }
 
 /* ---- the button row and the settings panel (0016) ---- */
@@ -1528,9 +1553,15 @@ void app_main(void)
     {
         const storage_id_t where = storage_present(STORAGE_SD) ? STORAGE_SD : STORAGE_USB;
         char dir[48] = "";
-        if (storage_present(where))
+        if (storage_present(where)) {
+            char old[48];
             snprintf(dir, sizeof(dir), "%s" CACHE_SUBDIR, storage_mount_path(where));
+            snprintf(old, sizeof(old), "%s" CACHE_OLD, storage_mount_path(where));
+            file_adopt(old, dir);
+        }
         netremote_init(dir[0] ? dir : "/nowhere", &MEM);
+        /* netremote_init() made it if it was not there. */
+        if (dir[0]) storage_mark_hidden(dir);
     }
 
     mapview_init(&s_view, src_draw, NULL, bufs, VIEW_ZOOM, style_background());

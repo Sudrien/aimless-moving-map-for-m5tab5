@@ -37,7 +37,7 @@ What works:
 - A marker, blue with a good 3D fix and grey with a rough one, and a
   status line with position, satellites, HDOP, speed and UTC.
 - Before the first fix, the map shows where the device last had a good
-  fix (kept on the card in `lastfix.dat`), with no
+  fix (kept on the card in `.aimless.lastfix.dat`), with no
   marker; with no such file, the world stays up until the fix.
 - Wi-Fi setup from a phone, and M5Launcher's saved networks imported.
 - An overview a few zooms out fills in, softly, wherever a tile has not
@@ -60,9 +60,13 @@ What works:
 
 Not yet: labels, the area cache. See `ARCHITECTURE.md`.
 
-Nothing this writes to the card ends in `.bin`: M5Launcher lists every
-`.bin` file as firmware to install. The original's `waypoints.bin` and
-`lastfix.bin` are renamed to `.dat` the first time they are read.
+What this keeps on the card is hidden, as Defeatist's is: dotted names
+with the FAT hidden attribute set, so they are not the first thing you
+see in the card's root on a computer -- `.aimless.waypoints.dat`,
+`.aimless.lastfix.dat`, and the tile cache in `.aimless.tiles/`. None
+ends in `.bin`, which M5Launcher would list as firmware to install. The
+original's `waypoints.bin`, `lastfix.bin` and `t/` are renamed to these
+the first time they are read, so their contents carry over.
 
 ## On the screen
 
@@ -73,7 +77,7 @@ Along the bottom, four buttons, where the original had them:
 - **points (N) / to NAME** -- saved points. "save here" drops one at
   your position; tap a point to be guided to it, and again (or "stop
   guiding") to stop; "del" removes one. Up to 32, kept on the card in
-  `waypoints.dat`, the original's format, so points saved under it are
+  `.aimless.waypoints.dat`, the original's format, so points saved under it are
   here too.
   While guiding, the point's name, distance and direction lead the
   status line, and an arrow from your position points at it -- a
