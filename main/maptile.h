@@ -92,6 +92,22 @@ void maprender_free(maprender_t *r);
 tile_state_t maprender_tile(maprender_t *r, maparchive_t *a, tile_id_t id,
                             uint16_t *px, int split);
 
+/*
+ * maprender_tile() in its two halves, for a payload that does not come
+ * straight from an archive -- the tile cache, the network.
+ *
+ * maprender_fetch() reads tile `id`'s compressed payload into r->tile
+ * (r->tile_cap bytes) and sets *len: TILE_READY, TILE_NODATA or
+ * TILE_ERROR as above, px not involved.
+ *
+ * maprender_payload() draws the `len` bytes already in r->tile: the gzip
+ * check, the inflate and the passes. TILE_NODATA for len 0.
+ */
+tile_state_t maprender_fetch(maprender_t *r, maparchive_t *a, tile_id_t id,
+                             int split, uint32_t *len);
+tile_state_t maprender_payload(maprender_t *r, uint32_t len, tile_id_t id,
+                               uint16_t *px, int split);
+
 #ifdef __cplusplus
 }
 #endif

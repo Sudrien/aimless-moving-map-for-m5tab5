@@ -175,15 +175,13 @@ static uint8_t pass_style(void *ctx, const mvt_layer_t *l, const char *s, uint32
     return style_lookup(NULL, l, s, n);
 }
 
-tile_state_t maprender_tile(maprender_t *r, maparchive_t *a, tile_id_t id,
-                            uint16_t *px, int split)
+tile_state_t maprender_fetch(maprender_t *r, maparchive_t *a, tile_id_t id,
+                             int split, uint32_t *len)
 {
-    r->last_bytes = r->last_inflated = 0;
+    *len = 0;
     const uint8_t  dz = (uint8_t)(id.z - split);
     const uint32_t dx = (uint32_t)id.x >> split;
     const uint32_t dy = (uint32_t)id.y >> split;
-    const uint32_t qx = (uint32_t)id.x & ((1u << split) - 1u);
-    const uint32_t qy = (uint32_t)id.y & ((1u << split) - 1u);
 
     uint32_t got = r->tile_cap;
     pmt_err_t e = pmt_get(&a->pmt, dz, dx, dy, r->tile, &got);
@@ -199,7 +197,19 @@ tile_state_t maprender_tile(maprender_t *r, maparchive_t *a, tile_id_t id,
     if (e == PMT_NOTFOUND || e == PMT_ERANGE) return TILE_NODATA;
     if (e != PMT_OK) return TILE_ERROR;
     if (got == 0) return TILE_NODATA;
+    *len = got;
+    return TILE_READY;
+}
+
+tile_state_t maprender_payload(maprender_t *r, uint32_t got, tile_id_t id,
+                               uint16_t *px, int split)
+{
+    r->last_bytes = r->last_inflated = 0;
+    if (got == 0) return TILE_NODATA;
+    if (got > r->tile_cap) return TILE_ERROR;
     r->last_bytes = got;
+    const uint32_t qx = (uint32_t)id.x & ((1u << split) - 1u);
+    const uint32_t qy = (uint32_t)id.y & ((1u << split) - 1u);
 
     /* Not gzip means not this tile: a transport problem, in the original's
      * words, wearing an inflate problem's clothes. */
@@ -251,4 +261,13 @@ tile_state_t maprender_tile(maprender_t *r, maparchive_t *a, tile_id_t id,
         rs_flush(&rs);
     }
     return TILE_READY;
+}
+
+tile_state_t maprender_tile(maprender_t *r, maparchive_t *a, tile_id_t id,
+                            uint16_t *px, int split)
+{
+    r->last_bytes = r->last_inflated = 0;
+    uint32_t got = 0;
+    const tile_state_t t = maprender_fetch(r, a, id, split, &got);
+    return t == TILE_READY ? maprender_payload(r, got, id, px, split) : t;
 }

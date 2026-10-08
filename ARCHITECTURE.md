@@ -24,6 +24,10 @@ does.
   tile. The original's "local archives".
 - **mapview** (`main/mapview.c`): the 2 x 2 grid of 1280 px subtiles
   around the position, its queue, and the window of it on screen.
+- **tilesrc** (`main/tilesrc.c`): which source a tile comes from -- the
+  cache, the card, the network. The original's netsource_get().
+- **tilecache** (`main/tilecache.c`): tiles fetched over the network,
+  kept on the card. The original's tilecache.cpp.
 - **gnss** (`main/gnss.c`, `main/nmea.h`): the M135.
 - **ffread** (`main/ffread.c`): a file read through FatFs directly.
 - **aimless** (`main/aimless.c`): boot, the loop, the drawing.
@@ -133,3 +137,31 @@ nvs at 0x9000 x 0x5000, and that is where their saved networks live.
 Milestone 2 reads them from there, so the table is theirs again, byte for
 byte. Flashing it over 0005 needs a full `idf.py flash`, which writes the
 table; the app is 3 MB now, not 4.
+
+### 0008 -- tilesrc and tilecache
+
+The first half of milestone 2, all host-tested: where a tile comes from,
+and the cache the network's tiles go into. Nothing reaches the network
+yet; the app's source chain has the card in it and nothing else, and
+draws as 0005 did.
+
+**The order** is the original's netsource_get(): the cache, then the
+card, then the network. A negative marker in the cache -- the network
+said it has no such tile -- stops the search before the network, so
+ocean is asked about once. What the network returns is cached only once
+it has drawn, so a bad payload is asked for again rather than kept.
+
+**The cache's files** are the original's, byte for byte: `<build>.dat`,
+records each with a 16-byte header, and `<build>.idx`, the sorted index.
+A card that cached tiles under the original keeps them. The index is
+written every write while the cache is small and every 256 later; a
+power cut costs a rescan of the records, not the tiles. stdio's offsets
+are 32-bit here, so the blob stops at 2 GB -- 80000 entries, the
+original's index size, is well under that.
+
+**maprender_tile()** is now maprender_fetch() and maprender_payload(),
+so a payload from the cache or the network draws the same way.
+`builddate.h` is the original's date arithmetic for naming a daily
+build, here so the test reaches it before the code that uses it. And
+mapview takes a draw callback instead of the archive set, plus a
+take/commit pair for the render worker to come.

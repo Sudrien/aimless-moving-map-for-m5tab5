@@ -65,7 +65,8 @@ make -C test
 ```
 
 The map pipeline on a synthetic archive, the grid that follows the
-position, and the NMEA parser. Only a C compiler is needed;
+position, the tile cache and the order tiles are looked for in, and the
+NMEA parser. Only a C compiler is needed;
 `test/make_fixture.py` regenerates the archive.
 
 ## Licence

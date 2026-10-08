@@ -5,3 +5,5 @@ sdkconfig
 sdkconfig.old
 test/nmeatest
 test/mapviewtest
+test/tilesrctest
+test/builddatetest

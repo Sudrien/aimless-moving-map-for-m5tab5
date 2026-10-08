@@ -11,10 +11,9 @@
  * renders one queued tile. mapview_compose() copies the window centred
  * on the position into a framebuffer.
  *
- * Free of ESP-IDF. Rendering and composing are called from the same
- * task, so there is no lock: the original's render worker on its own
- * core comes back with the second milestone, when a tile render must
- * stop holding up the screen.
+ * Free of ESP-IDF, and without a lock: a caller with a render worker on
+ * another task holds its own around everything but the draw (see
+ * mapview_take()).
  *
  * SPDX-License-Identifier: MIT
  */
@@ -31,9 +30,13 @@
 extern "C" {
 #endif
 
+/* Draw tile `id` (data `split` zooms coarser) into `px`. mapset_render()
+ * and tilesrc_draw() are two. */
+typedef tile_state_t (*mapview_draw_fn)(void *ctx, tile_id_t id, uint16_t *px, int split);
+
 typedef struct {
-    mapset_t     *set;
-    maprender_t  *render;
+    mapview_draw_fn draw;
+    void         *draw_ctx;
     tile_grid_t   grid;
     uint16_t     *bufs[GRID_COUNT];
     render_job_t  jobs[GRID_COUNT];
@@ -45,7 +48,7 @@ typedef struct {
 } mapview_t;
 
 /* `bufs` are GRID_COUNT buffers of SUBTILE_PX x SUBTILE_PX RGB565. */
-void mapview_init(mapview_t *v, mapset_t *set, maprender_t *render,
+void mapview_init(mapview_t *v, mapview_draw_fn draw, void *draw_ctx,
                   uint16_t *const *bufs, uint8_t z, uint16_t background);
 
 /* Follow a position. Queues whatever tiles it brings into the grid. */
@@ -54,6 +57,16 @@ void mapview_centre(mapview_t *v, double lat, double lon);
 /* Render the nearest queued tile. True if one was rendered (whatever its
  * result); false with nothing queued. */
 bool mapview_step(mapview_t *v);
+
+/*
+ * mapview_step() in three, for a render worker on another task: take the
+ * nearest job under the caller's lock, draw into *px without it, commit
+ * under it again. A job the grid has moved on from in between is refused
+ * by the commit (tile_grid.c's generation check), and its pixels were a
+ * PENDING slot's all along, so nothing half-drawn is ever composed.
+ */
+bool mapview_take(mapview_t *v, render_job_t *job, uint16_t **px);
+void mapview_commit(mapview_t *v, const render_job_t *job, tile_state_t t);
 
 /* Tiles still to render. */
 int  mapview_pending(const mapview_t *v);

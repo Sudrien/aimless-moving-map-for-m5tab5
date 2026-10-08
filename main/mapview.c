@@ -11,12 +11,12 @@
 
 #include "mercator.h"
 
-void mapview_init(mapview_t *v, mapset_t *set, maprender_t *render,
+void mapview_init(mapview_t *v, mapview_draw_fn draw, void *draw_ctx,
                   uint16_t *const *bufs, uint8_t z, uint16_t background)
 {
     memset(v, 0, sizeof(*v));
-    v->set = set;
-    v->render = render;
+    v->draw = draw;
+    v->draw_ctx = draw_ctx;
     v->z = z;
     v->background = background;
     for (int i = 0; i < GRID_COUNT; i++) v->bufs[i] = bufs[i];
@@ -82,15 +82,27 @@ void mapview_centre(mapview_t *v, double lat, double lon)
 
 int mapview_pending(const mapview_t *v) { return v->njobs; }
 
-bool mapview_step(mapview_t *v)
+bool mapview_take(mapview_t *v, render_job_t *job, uint16_t **px)
 {
     if (v->njobs == 0) return false;
-    const render_job_t job = v->jobs[0];
+    *job = v->jobs[0];
     memmove(&v->jobs[0], &v->jobs[1], (size_t)(v->njobs - 1) * sizeof(v->jobs[0]));
     v->njobs--;
-    subtile_t *s = &v->grid.slots[job.slot];
-    const tile_state_t t = mapset_render(v->set, v->render, job.id, s->pixels, SUBTILE_SPLIT);
-    grid_commit(&v->grid, &job, t);
+    *px = v->grid.slots[job->slot].pixels;
+    return true;
+}
+
+void mapview_commit(mapview_t *v, const render_job_t *job, tile_state_t t)
+{
+    grid_commit(&v->grid, job, t);
+}
+
+bool mapview_step(mapview_t *v)
+{
+    render_job_t job;
+    uint16_t *px;
+    if (!mapview_take(v, &job, &px)) return false;
+    mapview_commit(v, &job, v->draw(v->draw_ctx, job.id, px, SUBTILE_SPLIT));
     return true;
 }
 

@@ -46,6 +46,17 @@ bool mapset_covers(const maparchive_t *a, uint8_t z, uint32_t x, uint32_t y);
 tile_state_t mapset_render(mapset_t *s, maprender_t *r, tile_id_t id,
                            uint16_t *px, int split);
 
+/*
+ * mapset_render()'s fetch alone: the compressed payload of tile `id`
+ * from the first covering archive that has it, into r->tile, *len set.
+ * Same results as mapset_render(), without drawing.
+ */
+tile_state_t mapset_fetch(mapset_t *s, maprender_t *r, tile_id_t id,
+                          int split, uint32_t *len);
+
+/* Whether any archive's header covers z/x/y. */
+bool mapset_covers_any(const mapset_t *s, uint8_t z, uint32_t x, uint32_t y);
+
 /* Where to look before there is a fix: the first archive's centre,
  * from its header. False with no archives. */
 bool mapset_centre(const mapset_t *s, double *lat, double *lon);

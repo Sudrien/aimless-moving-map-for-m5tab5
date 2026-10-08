@@ -49,6 +49,7 @@
 #include "maptile.h"
 #include "mapview.h"
 #include "style.h"
+#include "tilesrc.h"
 
 static const char *TAG = "aimless";
 
@@ -79,6 +80,7 @@ static ffread_t    *s_file[MAPSET_MAX];
 static mapset_t     s_set;
 static maprender_t  s_render;
 static mapview_t    s_view;
+static tilesrc_t    s_src = { .local = &s_set };
 
 /* ---- memory: PSRAM for the big buffers, internal RAM for the hot ones,
  * as original/mapengine.cpp alloc_all() ---- */
@@ -121,6 +123,13 @@ static void scan_volume(storage_id_t id)
         mapset_add(&s_set, &s_arc[i]);
     }
     f_closedir(&d);
+}
+
+/* The view's draw callback: every tile through the source chain. */
+static tile_state_t src_draw(void *ctx, tile_id_t id, uint16_t *px, int split)
+{
+    (void)ctx;
+    return tilesrc_draw(&s_src, &s_render, id, px, split, NULL);
 }
 
 /* ---- drawing ---- */
@@ -227,7 +236,7 @@ void app_main(void)
         bufs[i] = mem_big((size_t)SUBTILE_PX * SUBTILE_PX * sizeof(uint16_t));
         if (!bufs[i]) { draw_message("Out of memory", "tile buffers"); return; }
     }
-    mapview_init(&s_view, &s_set, &s_render, bufs, VIEW_ZOOM, style_background());
+    mapview_init(&s_view, src_draw, NULL, bufs, VIEW_ZOOM, style_background());
     ESP_LOGI(TAG, "%d tiles of %d px in PSRAM; %u KB PSRAM, %u KB internal left",
              GRID_COUNT, SUBTILE_PX,
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),

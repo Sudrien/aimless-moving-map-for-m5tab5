@@ -39,6 +39,14 @@ static int file_read(void *ctx, uint64_t off, uint32_t len, uint8_t *dst)
 static void *big(size_t n) { return malloc(n); }
 static const maptile_alloc_t MEM = { big, NULL, free };
 
+typedef struct { mapset_t *set; maprender_t *r; } setdraw_t;
+
+static tile_state_t set_draw(void *ctx, tile_id_t id, uint16_t *px, int split)
+{
+    setdraw_t *d = ctx;
+    return mapset_render(d->set, d->r, id, px, split);
+}
+
 static int count(const uint16_t *fb, uint16_t c)
 {
     int n = 0;
@@ -75,7 +83,8 @@ int main(int argc, char **argv)
         bufs[i] = malloc((size_t)SUBTILE_PX * SUBTILE_PX * sizeof(uint16_t));
 
     mapview_t v;
-    mapview_init(&v, &set, &r, bufs, Z, bg);
+    setdraw_t sd = { &set, &r };
+    mapview_init(&v, set_draw, &sd, bufs, Z, bg);
 
     static uint16_t fb[W * H];
     mapview_compose(&v, fb, W, H, W);

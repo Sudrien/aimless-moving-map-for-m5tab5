@@ -50,6 +50,31 @@ tile_state_t mapset_render(mapset_t *s, maprender_t *r, tile_id_t id,
     return (asked && failed == asked) ? TILE_ERROR : TILE_NODATA;
 }
 
+tile_state_t mapset_fetch(mapset_t *s, maprender_t *r, tile_id_t id,
+                          int split, uint32_t *len)
+{
+    *len = 0;
+    const uint8_t  dz = (uint8_t)(id.z - split);
+    const uint32_t dx = (uint32_t)id.x >> split;
+    const uint32_t dy = (uint32_t)id.y >> split;
+    int asked = 0, failed = 0;
+    for (int i = 0; i < s->n; i++) {
+        if (!mapset_covers(s->arc[i], dz, dx, dy)) continue;
+        asked++;
+        const tile_state_t t = maprender_fetch(r, s->arc[i], id, split, len);
+        if (t == TILE_READY) return t;
+        if (t == TILE_ERROR) failed++;
+    }
+    return (asked && failed == asked) ? TILE_ERROR : TILE_NODATA;
+}
+
+bool mapset_covers_any(const mapset_t *s, uint8_t z, uint32_t x, uint32_t y)
+{
+    for (int i = 0; i < s->n; i++)
+        if (mapset_covers(s->arc[i], z, x, y)) return true;
+    return false;
+}
+
 bool mapset_centre(const mapset_t *s, double *lat, double *lon)
 {
     if (s->n == 0) return false;
