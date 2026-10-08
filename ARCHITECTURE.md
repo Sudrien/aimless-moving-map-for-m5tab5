@@ -691,3 +691,18 @@ And from the same log: a tile with no data was logged with byte sizes
 left in the render scratch by whatever it drew last -- at boot, the
 world tile's 66795 -> 93230. Sizes are now logged only for a tile that
 drew.
+
+### 0025 -- 0024's format-truncation errors
+
+0024 did not build: `char rate[24]` held "%d sentences/min", which
+GCC's -Wformat-truncation sizes at 25 bytes for any int, and IDF makes
+that an error. Both buffers are 32 now.
+
+It got through because the checks before it compiled with
+-fsyntax-only, and GCC runs its format-truncation analysis only when it
+generates code. Every file in main/ is now compiled for the P4 with
+-c at -Og, -Os and -O2, -Wall -Wextra -Werror; that found two more,
+which the IDF build at its own level had not tripped but another
+optimisation level would, and both are bounded now:
+netremote.c's build name read from build.txt (already length-checked)
+and portal.c's non-ASCII hint in the page message.

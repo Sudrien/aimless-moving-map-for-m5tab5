@@ -296,7 +296,7 @@ static void draw_status(const gnss_fix_t *fix, int pending)
                  VIEW_ZOOM, fix->sats, fix->hdop, fix->speed_kmh, fix->utc,
                  s_online ? "online" : "offline", pending ? "   drawing" : "");
     } else {
-        char rate[24];
+        char rate[32];   /* GCC sizes %d for any int: 25 with the words */
         if (s_sent_per_min < 0) snprintf(rate, sizeof(rate), "listening");
         else snprintf(rate, sizeof(rate), "%d sentences/min", s_sent_per_min);
         snprintf(line, sizeof(line), "waiting for a fix   %s   %d sats in view   %s%s",
@@ -1676,7 +1676,7 @@ void app_main(void)
             netremote_stats(&ns);
             char route[64];
             net_route_describe(route, sizeof(route));
-            char rate[24];
+            char rate[32];   /* GCC sizes %d for any int: 25 with the words */
             if (s_sent_per_min < 0) snprintf(rate, sizeof(rate), "? sentences/min");
             else snprintf(rate, sizeof(rate), "%d sentences/min", s_sent_per_min);
             ESP_LOGI(TAG, "fix %c mode %d, %d sats, HDOP %.1f, %s, PPS %u",

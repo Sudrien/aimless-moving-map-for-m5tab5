@@ -385,7 +385,7 @@ static esp_err_t h_join(httpd_req_t *req)
         portalweb_non_ascii_hint(s_pass, s_hint, sizeof(s_hint));
         memset(s_pass, 0, sizeof(s_pass));
         if (!portalweb_escape(s_hint, s_esc_hint, sizeof(s_esc_hint))) s_esc_hint[0] = '\0';
-        snprintf(s_msg, sizeof(s_msg), "The password contains %s. A Wi-Fi password "
+        snprintf(s_msg, sizeof(s_msg), "The password contains %.300s. A Wi-Fi password "
                  "is plain keyboard characters only; phones substitute these when "
                  "autocorrect or smart punctuation is on. Retype it with that "
                  "turned off.", s_esc_hint);

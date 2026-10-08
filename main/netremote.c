@@ -235,7 +235,7 @@ static void manifest_load(void)
     if (fgets(a, sizeof(a), f) && fgets(b, sizeof(b), f)) {
         a[strcspn(a, "\r\n")] = 0;
         if (strlen(a) > 0 && strlen(a) < sizeof(s_build)) {
-            snprintf(s_build, sizeof(s_build), "%s", a);
+            snprintf(s_build, sizeof(s_build), "%.15s", a);   /* length checked above */
             s_adopted = (int32_t)strtol(b, NULL, 10);
             /* An adoption day from the original's epoch is centuries
              * ahead of this one's; read it as "adopted today", so the
