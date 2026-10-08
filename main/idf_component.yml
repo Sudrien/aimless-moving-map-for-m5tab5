@@ -2,6 +2,14 @@ dependencies:
   idf:
     version: ">=5.4.2"
 
+  # cJSON, for M5Launcher's config.conf (launcher_import.c). IDF 6.0
+  # moved it out of the tree into the registry; on 5.x the rule is false
+  # and CMakeLists.txt requires IDF's own `json`. As defeatist's 6031.
+  espressif/cjson:
+    version: "^1.7.19"
+    rules:
+      - if: "idf_version >=6.0"
+
   # The board, the panel and the storage, from the libraries pulled out of
   # defeatist-music-player-for-m5tab5. PINNED TO TAGS: a moving branch
   # would change underneath a build that worked.

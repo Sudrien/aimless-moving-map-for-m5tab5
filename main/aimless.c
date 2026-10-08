@@ -15,13 +15,16 @@
  *                 feckless-network; saved networks are defeatist's
  *   render task   core 1: one tile at a time, from the cache, the card
  *                 or the network (tilesrc.h, netremote.h)
- *   this loop     follow the fix, draw
+ *   touch         the panel's controller, turned with the picture
+ *   setup         M5Launcher's saved networks imported (launcher_import.h),
+ *                 or the setup portal (portal.h): with nothing saved, or
+ *                 with a touch in the first two seconds, as the original
+ *   this loop     follow the fix, draw, and the setup box over the map
  *
  * What the original did that this does not yet: labels, place names,
- * zoom levels other than z14, the compass, waypoints, the setup portal
- * (so no way to add a network here yet), Wi-Fi location, the world map
- * floor, the night palette's automatic switch. ARCHITECTURE.md has the
- * milestones.
+ * zoom levels other than z14, the compass, waypoints, Wi-Fi location,
+ * the world map floor, the night palette's automatic switch.
+ * ARCHITECTURE.md has the milestones.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -46,6 +49,7 @@
 #include "storage.h"
 #include "storage_io.h"
 #include "tab5io.h"
+#include "touch.h"
 #include "usbhost.h"
 
 #include "ethernet.h"
@@ -56,12 +60,14 @@
 #include "ffread.h"
 #include "builddate.h"
 #include "gnss.h"
+#include "launcher_import.h"
 #include "mapconfig.h"
 #include "mapset.h"
 #include "maptile.h"
 #include "mapview.h"
 #include "style.h"
 #include "netremote.h"
+#include "portal.h"
 #include "tilesrc.h"
 
 static const char *TAG = "aimless";
@@ -107,6 +113,25 @@ static const char *TAG = "aimless";
 /* src: chosen. How often tiles that failed are tried again. */
 #define REDO_ERRORS_US  (30 * 1000000LL)
 
+/* A touch this long after the screen comes up asks for Wi-Fi setup.
+ * src: original/tab5_map.cpp wantsSetup(), two seconds. */
+#define SETUP_WINDOW_US (2 * 1000000LL)
+/* src: original/tab5_map.cpp wantsSetup(): it polled every 20 ms. */
+#define SETUP_POLL_MS   (20)
+/* How long the radio may take to come up for the portal before setup
+ * gives up. src: chosen; wifi_start() is about two seconds (wifi.h). */
+#define SETUP_RADIO_US  (30 * 1000000LL)
+/* How long the result stays in the box after setup ends. src: chosen. */
+#define SETUP_NOTE_US   (8 * 1000000LL)
+/* The setup box, along the bottom of the map. src: chosen, three lines
+ * of TEXT_SCALE text with room between. */
+#define SETUP_MARGIN    (40)
+#define SETUP_PAD       (14)
+#define SETUP_LINE      (GFX_GLYPH_H(TEXT_SCALE) + 10)
+#define SETUP_H         (SETUP_PAD * 2 + SETUP_LINE * 3)
+#define COL_SETUP_BG    RGB(20, 20, 20)
+#define COL_SETUP_EDGE  RGB(240, 180, 60)
+
 static maparchive_t s_arc[MAPSET_MAX];
 static ffread_t    *s_file[MAPSET_MAX];
 static mapset_t     s_set;
@@ -118,6 +143,22 @@ static tilesrc_t    s_src = { .local = &s_set };
 static SemaphoreHandle_t s_lock;
 static volatile bool s_dirty;
 static volatile bool s_online;
+
+/*
+ * Wi-Fi setup, as this loop moves through it. Read by the network's
+ * hooks from its own task, so a single word.
+ *
+ *   SETUP_NONE     nothing to do, or done
+ *   SETUP_IMPORT   reading M5Launcher's networks; the portal waits on it
+ *   SETUP_WANT     the radio is wanted for the portal and coming up
+ *   SETUP_ACTIVE   the portal is running
+ */
+typedef enum { SETUP_NONE = 0, SETUP_IMPORT, SETUP_WANT, SETUP_ACTIVE } setup_t;
+static volatile setup_t s_setup;
+static int64_t s_setup_since;       /* when WANT began, for SETUP_RADIO_US */
+/* What happened, shown in the box for SETUP_NOTE_US after setup ends. */
+static char    s_setup_note[96];
+static int64_t s_setup_note_until;
 
 /* ---- memory: PSRAM for the big buffers, internal RAM for the hot ones,
  * as original/mapengine.cpp alloc_all() ---- */
@@ -202,6 +243,88 @@ static void draw_message(const char *a, const char *b)
     gfx_blit(0, gfx_h());
 }
 
+/* ---- the setup box ---- */
+
+static void setup_note(const char *msg)
+{
+    snprintf(s_setup_note, sizeof(s_setup_note), "%s", msg);
+    s_setup_note_until = esp_timer_get_time() + SETUP_NOTE_US;
+    ESP_LOGI(TAG, "setup: %s", msg);
+}
+
+static void setup_box_rect(int *x, int *y, int *w, int *h)
+{
+    *x = SETUP_MARGIN;
+    *w = gfx_w() - 2 * SETUP_MARGIN;
+    *h = SETUP_H;
+    *y = gfx_h() - SETUP_MARGIN - SETUP_H;
+}
+
+/* What the box says, three lines; false when there is no box. The SSIDs
+ * are the portal's copies, never borrowed (portal.h). */
+static bool setup_lines(char a[96], char b[128], char c[96])
+{
+    a[0] = b[0] = c[0] = '\0';
+    const setup_t st = s_setup;
+    if (st == SETUP_IMPORT) {
+        snprintf(a, 96, "Wi-Fi: reading M5Launcher's saved networks");
+        return true;
+    }
+    if (st == SETUP_WANT) {
+        snprintf(a, 96, "Wi-Fi setup: starting the radio");
+        return true;
+    }
+    if (st == SETUP_ACTIVE) {
+        portal_state_t ps;
+        portal_state(&ps);
+        switch (ps.status) {
+        case PORTAL_OFF:
+        case PORTAL_STARTING:
+            snprintf(a, 96, "Wi-Fi setup: looking for networks");
+            break;
+        case PORTAL_TRYING:
+            snprintf(a, 96, "Wi-Fi setup: trying %s", ps.last_ssid);
+            snprintf(b, 128, "This takes up to fifteen seconds.");
+            break;
+        case PORTAL_SAVED:
+            snprintf(a, 96, "Wi-Fi setup: saved %s", ps.last_ssid);
+            break;
+        default:
+            snprintf(a, 96, "Wi-Fi setup: on a phone, join the network %s", ps.ap_ssid);
+            if (ps.status == PORTAL_FAILED)
+                snprintf(b, 128, "That did not work for %s. Try again on the phone.   %u:%02u left",
+                         ps.last_ssid, ps.seconds_left / 60u, ps.seconds_left % 60u);
+            else
+                snprintf(b, 128, "Open http://%s/ if no page appears.   %u phone%s joined   %u:%02u left",
+                         ps.url_ip, ps.clients, ps.clients == 1 ? "" : "s",
+                         ps.seconds_left / 60u, ps.seconds_left % 60u);
+            break;
+        }
+        snprintf(c, 96, "Tap here to close Wi-Fi setup");
+        return true;
+    }
+    if (s_setup_note[0] && esp_timer_get_time() < s_setup_note_until) {
+        snprintf(a, 96, "%s", s_setup_note);
+        return true;
+    }
+    return false;
+}
+
+static void draw_setup(void)
+{
+    /* Statics: 320 bytes is past CLAUDE.md's few hundred on a stack. */
+    static char a[96], b[128], c[96];
+    if (!setup_lines(a, b, c)) return;
+    int x, y, w, h;
+    setup_box_rect(&x, &y, &w, &h);
+    gfx_fill_rect(x, y, w, h, COL_SETUP_EDGE);
+    gfx_fill_rect(x + 2, y + 2, w - 4, h - 4, COL_SETUP_BG);
+    const int tx = x + SETUP_PAD, tw = w - 2 * SETUP_PAD;
+    gfx_draw_text(tx, y + SETUP_PAD, a, TEXT_SCALE, tw, COL_STATUS_FG);
+    if (b[0]) gfx_draw_text(tx, y + SETUP_PAD + SETUP_LINE, b, TEXT_SCALE, tw, COL_STATUS_FG);
+    if (c[0]) gfx_draw_text(tx, y + SETUP_PAD + 2 * SETUP_LINE, c, TEXT_SCALE, tw, COL_WAIT);
+}
+
 static void draw(const gnss_fix_t *fix)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -217,6 +340,7 @@ static void draw(const gnss_fix_t *fix)
         gfx_fill_circle(cx, cy, MARKER_R, gnss_fine(fix) ? COL_FINE : COL_COARSE);
     }
     draw_status(fix, pending);
+    draw_setup();
     gfx_blit(0, gfx_h());
 }
 
@@ -286,9 +410,18 @@ static void render_task(void *arg)
 
 /* ---- the network ---- */
 
-/* The radio only when there is somewhere to join; the cable regardless. */
-static bool want_wifi(void) { return wifistore_count() > 0; }
+/* The radio when there is somewhere to join, or while setup wants it
+ * for the portal; the cable regardless. */
+static bool setup_owns_radio(void)
+{
+    return s_setup == SETUP_WANT || s_setup == SETUP_ACTIVE;
+}
+static bool want_wifi(void) { return wifistore_count() > 0 || setup_owns_radio(); }
 static bool want_ntp(void)  { return true; }
+/* The network's background join stays out of the way from the moment
+ * setup asks for the radio, not only once the AP is up: otherwise its
+ * scan and joins race the portal's own scan. */
+static bool hook_portal_running(void) { return setup_owns_radio() || portal_running(); }
 
 static void net_start(void)
 {
@@ -305,6 +438,8 @@ static void net_start(void)
     static const feckless_net_hooks_t hooks = {
         .ntp_enabled        = want_ntp,
         .wifi_enabled       = want_wifi,
+        .portal_running     = hook_portal_running,
+        .portal_stop        = portal_stop,
         .usb_register_class = usbhost_register_class,
     };
     feckless_net_set_hooks(&hooks);
@@ -312,6 +447,137 @@ static void net_start(void)
     /* Before usbhost_start(), like every class on the port. */
     if (ethernet_init() != ESP_OK)
         ESP_LOGW(TAG, "no USB Ethernet this boot");
+}
+
+/* ---- setup ---- */
+
+/* Touch at boot, as the original's wantsSetup(): any touch within the
+ * window asks for the portal even with networks saved. */
+static bool setup_asked(void)
+{
+    if (!touch_present()) return false;
+    draw_message("Aimless Moving Map", "Touch the screen now to set up Wi-Fi.");
+    const int64_t t0 = esp_timer_get_time();
+    while (esp_timer_get_time() - t0 < SETUP_WINDOW_US) {
+        int x, y;
+        if (touch_get(&x, &y)) {
+            touch_swallow();
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(SETUP_POLL_MS));
+    }
+    return false;
+}
+
+/* Ask for the radio for the portal. setup_begin() runs before boot's
+ * first wifi_request_apply(), so from there this is that call's to
+ * make; from setup_step() it makes its own. */
+static void setup_want(bool apply)
+{
+    s_setup = SETUP_WANT;
+    s_setup_since = esp_timer_get_time();
+    if (apply) wifi_request_apply();
+}
+
+/* Which setup this boot needs. The original's rule: the portal when
+ * nothing is saved or a touch asked for it. Before the portal, a
+ * Launcher install is asked for its networks, so a password typed into
+ * Launcher is not asked for twice. */
+static void setup_begin(bool asked)
+{
+    if (asked) {
+        ESP_LOGI(TAG, "setup: asked for by touch");
+        setup_want(false);
+    } else if (wifistore_count() > 0) {
+        s_setup = SETUP_NONE;
+    } else if (launcher_present() && launcher_import_request() == ESP_OK) {
+        ESP_LOGI(TAG, "setup: nothing saved; asking M5Launcher");
+        s_setup = SETUP_IMPORT;
+    } else {
+        ESP_LOGI(TAG, "setup: nothing saved; starting the portal");
+        setup_want(false);
+    }
+}
+
+/* One step, from the loop. */
+static void setup_step(void)
+{
+    switch (s_setup) {
+    case SETUP_IMPORT: {
+        li_status_t li;
+        launcher_import_status(&li);
+        if (li.phase == LI_RUNNING) return;
+        if (wifistore_count() > 0) {
+            setup_note(li.msg);
+            s_setup = SETUP_NONE;
+            wifi_request_apply();       /* the radio, and a join */
+        } else {
+            ESP_LOGI(TAG, "setup: %s", li.msg);
+            setup_want(true);
+        }
+        s_dirty = true;
+        return;
+    }
+    case SETUP_WANT:
+        if (wifi_up()) {
+            if (portal_start() == ESP_OK) s_setup = SETUP_ACTIVE;
+        } else if (esp_timer_get_time() - s_setup_since >= SETUP_RADIO_US) {
+            setup_note("Wi-Fi setup: the radio did not come up");
+            s_setup = SETUP_NONE;
+            wifi_request_apply();
+        }
+        return;
+    case SETUP_ACTIVE:
+        if (portal_running()) return;
+        {
+            portal_state_t ps;
+            portal_state(&ps);
+            char msg[96];
+            switch (ps.status) {
+            case PORTAL_SAVED:
+                snprintf(msg, sizeof(msg), "Wi-Fi: saved %s", ps.last_ssid);
+                break;
+            case PORTAL_TIMEDOUT:
+                snprintf(msg, sizeof(msg), "Wi-Fi setup closed after %d minutes with nothing saved",
+                         PORTAL_TIMEOUT_S / 60);
+                break;
+            case PORTAL_ERROR:
+                snprintf(msg, sizeof(msg), "Wi-Fi setup stopped: the radio failed");
+                break;
+            default:
+                snprintf(msg, sizeof(msg), "Wi-Fi setup closed");
+                break;
+            }
+            setup_note(msg);
+        }
+        s_setup = SETUP_NONE;
+        /* Back to what the saved list says: off with nothing saved, and
+         * the background join otherwise. */
+        wifi_request_apply();
+        s_dirty = true;
+        return;
+    default:
+        return;
+    }
+}
+
+/* A tap on the box closes the portal. Edge-triggered: one press is one
+ * tap. */
+static void setup_touch(void)
+{
+    static bool was_down;
+    int x, y;
+    const bool down = touch_get(&x, &y);
+    const bool tap = down && !was_down;
+    was_down = down;
+    if (!tap || s_setup != SETUP_ACTIVE) return;
+    int bx, by, bw, bh;
+    setup_box_rect(&bx, &by, &bw, &bh);
+    if (x >= bx && x < bx + bw && y >= by && y < by + bh) {
+        ESP_LOGI(TAG, "setup: closed by touch");
+        portal_request_stop();
+        touch_swallow();
+    }
 }
 
 /* ---- boot ---- */
@@ -332,6 +598,13 @@ void app_main(void)
     gfx_set_rotation(VIEW_ROTATION);
     draw_message("Aimless Moving Map", "looking for maps");
     ESP_ERROR_CHECK(lcd_backlight_set(BACKLIGHT_PCT));
+    /* After the panel: the controller's reset is released with the
+     * panel's (touch.h). Without touch the map runs; only setup by touch
+     * is lost. */
+    if (touch_init(tab5io_bus(), LCD_H_RES, LCD_V_RES) == ESP_OK)
+        touch_set_rotation(VIEW_ROTATION);
+    else
+        ESP_LOGW(TAG, "no touch this boot");
 
     /* The card, and a USB drive on the USB-A port, which feckless-storage
      * registers with the drivers' USB host before the port comes up. */
@@ -343,14 +616,22 @@ void app_main(void)
         .powered        = usbhost_powered,
     };
     ESP_ERROR_CHECK(storage_init(&usb));
+    portal_init();
     net_start();
     usbhost_start();
-    /* The join runs on the network's own worker; this returns at once. */
-    wifi_request_apply();
 
     /* The receiver searches while everything else comes up. */
     if (!gnss_start(GNSS_P4_RX_PIN, GNSS_P4_TX_PIN, GNSS_BAUD, GNSS_PPS_PIN, 0, 5))
         ESP_LOGE(TAG, "GNSS did not start");
+
+    /* The two seconds to ask for Wi-Fi setup, while the receiver and a
+     * USB drive come up anyway. Before the radio is asked for, so the
+     * first apply already knows whether the portal wants it, and the
+     * background join does not start a scan the portal's would race. */
+    setup_begin(setup_asked());
+    draw_message("Aimless Moving Map", "looking for maps");
+    /* The join runs on the network's own worker; this returns at once. */
+    wifi_request_apply();
 
     /* Archives: the card is mounted by storage_init(); a USB drive takes
      * a few seconds to enumerate, so it is looked for a few times. None
@@ -421,6 +702,9 @@ void app_main(void)
         }
         /* Today's date, for finding a daily build without SNTP. */
         if (fix.status == 'A') netremote_set_today(bd_from_ddmmyy(fix.date));
+
+        setup_step();
+        setup_touch();
 
         const int64_t now = esp_timer_get_time();
         if (s_dirty || now - last_draw >= 1000000) {

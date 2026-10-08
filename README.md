@@ -25,7 +25,7 @@ Arduino core and no M5Unified, on four libraries pulled out of
 | [feckless-storage-handler-for-m5tab5](https://github.com/Sudrien/feckless-storage-handler-for-m5tab5) | the microSD card and USB drives |
 | [feckless-network-handler-for-m5tab5](https://github.com/Sudrien/feckless-network-handler-for-m5tab5) | Wi-Fi, saved networks, USB Ethernet |
 
-## Status: milestone 2
+## Status: milestone 2, and the start of 3
 
 What works:
 
@@ -38,17 +38,30 @@ What works:
   status line with position, satellites, HDOP, speed and UTC.
 - Before the first fix, the map shows the first archive's centre, with
   no marker.
+- Wi-Fi setup from a phone, and M5Launcher's saved networks imported.
 
-Not yet: labels, other zooms, the compass, waypoints, the Wi-Fi setup
-page. See `ARCHITECTURE.md`.
+Not yet: labels, other zooms, the compass, waypoints. See
+`ARCHITECTURE.md`.
 
 ## Networks
 
 Saved Wi-Fi networks are shared with
 [Defeatist Music Player](https://github.com/Sudrien/defeatist-music-player-for-m5tab5):
-join a network there and this program joins it too. There is no way to
-add one here yet. A USB Ethernet adapter (ASIX, or Realtek in CDC-ECM
-mode) works without anything saved.
+join a network there and this program joins it too, and the other way
+round. A USB Ethernet adapter (ASIX, or Realtek in CDC-ECM mode) works
+without anything saved.
+
+To add a network here, touch the screen while it says so at startup, or
+start with nothing saved. The map comes up as usual, with a box along
+the bottom naming a network, `Aimless-` and four letters: join it on a
+phone, and the setup page opens (or open `http://192.168.4.1/`). Choose
+a network and type its password; it is tried before it is saved. The
+box counts down five minutes, and a tap on it closes setup early.
+
+Started from [M5Launcher](https://github.com/bmorcelli/Launcher) with
+nothing saved, the map first copies Launcher's own saved networks, so a
+password typed into Launcher is not asked for again. Open networks are
+not supported.
 
 Tiles come from Protomaps' daily builds by default. They ask that their
 bucket not be hotlinked; for regular use, copy a build to storage of your
