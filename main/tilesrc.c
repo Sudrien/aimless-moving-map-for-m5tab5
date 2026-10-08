@@ -95,12 +95,15 @@ tile_state_t tilesrc_store(tilesrc_t *s, maprender_t *r, tile_id_t id,
      * the original found this was the whole of a walk over a planet
      * archive, real bytes and real minutes for nothing. */
     if (s->local && s->local->n && mapset_covers_any(s->local, dz, dx, dy)) {
+        s->st.local_hits++;
         if (from) *from = TILESRC_LOCAL;
         return TILE_READY;
     }
     if (!s->cache || !tilecache_is_open(s->cache)) return TILE_ERROR;
     uint32_t n = r->tile_cap;
     if (tilecache_get(s->cache, dz, dx, dy, r->tile, &n)) {
+        if (n) s->st.cache_hits++;
+        else s->st.misses++;
         if (from) *from = TILESRC_CACHE;
         return n ? TILE_READY : TILE_NODATA;
     }
@@ -109,6 +112,7 @@ tile_state_t tilesrc_store(tilesrc_t *s, maprender_t *r, tile_id_t id,
     const tile_state_t f = maprender_fetch(r, s->remote, id, split, &n);
     if (f == TILE_NODATA) {
         tilecache_put(s->cache, dz, dx, dy, NULL, 0);
+        s->st.misses++;
         if (from) *from = TILESRC_NET;
         return TILE_NODATA;
     }
@@ -116,7 +120,8 @@ tile_state_t tilesrc_store(tilesrc_t *s, maprender_t *r, tile_id_t id,
         s->st.errors++;
         return TILE_ERROR;
     }
-    if (!tilecache_put(s->cache, dz, dx, dy, r->tile, n)) return TILE_ERROR;
+    if (!tilecache_put(s->cache, dz, dx, dy, r->tile, n)) { s->st.errors++; return TILE_ERROR; }
+    s->st.net_hits++;
     if (from) *from = TILESRC_NET;
     return TILE_READY;
 }

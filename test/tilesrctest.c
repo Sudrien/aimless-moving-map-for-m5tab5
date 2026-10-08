@@ -204,6 +204,17 @@ int main(void)
         tilecache_close(&c2);
         st.cache = &c2;
         CHECK(tilesrc_store(&st, &r, tid(CX - 1, CY), 0, &from) == TILE_ERROR, "no cache");
+        /* Counted as tilesrc_draw() counts (0027): the status line's
+         * "tiles N cache, N card, N network" saw none of the area cache's.
+         * One payload from the network and one from the cache (and the
+         * draw above, another from the cache); a no-data
+         * answer and the marker it left, both misses; one covered by the
+         * card; the failed fetch. Offline and no cache are not tiles
+         * tried, as tilesrc_draw() does not count them either. */
+        CHECK(st.st.net_hits == 1 && st.st.cache_hits == 2 && st.st.local_hits == 1 &&
+              st.st.misses == 2 && st.st.errors == 1,
+              "store stats net %u cache %u local %u misses %u errors %u",
+              st.st.net_hits, st.st.cache_hits, st.st.local_hits, st.st.misses, st.st.errors);
         tilecache_remove(dir, "store");
     }
 

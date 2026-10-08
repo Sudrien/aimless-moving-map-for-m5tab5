@@ -753,3 +753,19 @@ Host: areatest (450 checks), tilesrctest 14 more, uirowtest. Device:
 every main/*.c compiled with -c at -Og, -Os and -O2 for the P4; not
 built. On the board: "area: tap again within 5 s ...", "area: 250 tiles
 around 14/x/y", "area: 25 of 250" every 25, and a summary at the end.
+
+### 0027 -- the area cache, counted
+
+Two things the board's first run of 0026 showed. The summary at the
+end never printed: the walk only finds out it is over when asked for
+one tile more, and the summary was looked for on the last tile's step,
+which still saw it running. It is printed now on the step that finds
+none. And the status line's "tiles N cache, N card, N network" stayed
+where the screen had left it through 250 tiles, while the request count
+climbed: tilesrc_store() did not count what it held. It counts as
+tilesrc_draw() does now -- a payload from the network or the cache, a
+tile the card covers, a no-data answer or marker as a miss, a failed
+fetch as an error.
+
+Host: tilesrctest one more. Device: aimless.c and tilesrc.c compiled
+with -c at -Og, -Os and -O2 for the P4; not built.

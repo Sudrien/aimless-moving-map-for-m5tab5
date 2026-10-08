@@ -1051,9 +1051,20 @@ static bool area_step(void)
     if (!s_src.remote) return false;
     tile_id_t id;
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    const bool any = s_area.active && area_next(&s_area, &id);
+    const bool was = s_area.active;
+    const bool any = was && area_next(&s_area, &id);
+    const area_t a0 = s_area;
     xSemaphoreGive(s_lock);
-    if (!any) return false;
+    /* The walk only knows it is over when asked for one more tile, so the
+     * summary is here, on the call that finds none (0027: it was on the
+     * last tile's, which still saw the walk active, and never printed). */
+    if (!any) {
+        if (was)
+            ESP_LOGI(TAG, "area: %d tiles done -- %d from the network, %d already cached, "
+                          "%d on the card, %d empty, %d failed",
+                     a0.done, a0.fetched, a0.cached, a0.offline, a0.empty, a0.failed);
+        return false;
+    }
 
     tilesrc_from_t from;
     const tile_state_t t = tilesrc_store(&s_src, &s_render, id, 0, &from);
@@ -1072,11 +1083,7 @@ static bool area_step(void)
     xSemaphoreGive(s_lock);
     s_dirty = true;     /* the button's percentage */
 
-    if (!a.active)
-        ESP_LOGI(TAG, "area: %d tiles done -- %d from the network, %d already cached, "
-                      "%d on the card, %d empty, %d failed",
-                 a.done, a.fetched, a.cached, a.offline, a.empty, a.failed);
-    else if (a.done % 25 == 0)
+    if (a.done % 25 == 0)
         ESP_LOGI(TAG, "area: %d of %d", a.done, a.total);
     return true;
 }
