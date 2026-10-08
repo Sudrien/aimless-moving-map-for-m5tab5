@@ -326,3 +326,9 @@ Launcher with nothing saved: "setup: nothing saved; asking M5Launcher",
 "key recovered from partition '...'", a line per network, and "setup:
 Imported N from M5Launcher, skipped M". What has not been seen on
 hardware: everything above.
+
+### 0013 -- out/, removed
+
+0011 as first sent carried a copy of the 0010 patch file under `out/`,
+left in the work tree when 0011 was committed. That copy went in with
+it. This removes it; nothing else changes.
