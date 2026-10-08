@@ -14,6 +14,9 @@
 #
 # builddatetest: main/builddate.h, the dates daily builds are named for.
 #
+# portalwebtest: main/portalweb.c and main/dnsreply.c, the setup portal's
+# form and DNS -- the code that reads bytes from anyone in radio range.
+#
 # -fno-sanitize=shift: raster.c converts to fixed point with
 # `v << RS_FRAC_BITS` on signed values that can be negative (geometry
 # outside the tile). That is undefined in C11 and does the arithmetic
@@ -34,7 +37,7 @@ LDFLAGS := -fsanitize=address,undefined -fno-sanitize=shift -lm
 CORE_SRCS := $(CORE)/src/inflate.c $(CORE)/src/mvt.c $(CORE)/src/pmtiles.c \
              $(CORE)/src/raster.c $(CORE)/src/style.c $(CORE)/src/tile_grid.c
 
-all: run-maptile run-nmea run-mapview run-tilesrc run-builddate
+all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb
 
 maptiletest: maptiletest.c ../main/maptile.c ../main/maptile.h $(CORE_SRCS) fixture.pmtiles
 	$(CC) $(CFLAGS) -o $@ maptiletest.c ../main/maptile.c $(CORE_SRCS) $(LDFLAGS)
@@ -66,7 +69,13 @@ builddatetest: builddatetest.c ../main/builddate.h
 run-builddate: builddatetest
 	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./builddatetest
 
-clean:
-	rm -f maptiletest nmeatest mapviewtest tilesrctest builddatetest
+portalwebtest: portalwebtest.c ../main/portalweb.c ../main/portalweb.h ../main/dnsreply.c ../main/dnsreply.h
+	$(CC) $(CFLAGS) -o $@ portalwebtest.c ../main/portalweb.c ../main/dnsreply.c $(LDFLAGS)
 
-.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate clean
+run-portalweb: portalwebtest
+	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./portalwebtest
+
+clean:
+	rm -f maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest
+
+.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb clean

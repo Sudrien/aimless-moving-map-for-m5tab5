@@ -7,3 +7,4 @@ test/nmeatest
 test/mapviewtest
 test/tilesrctest
 test/builddatetest
+test/portalwebtest

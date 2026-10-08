@@ -223,3 +223,20 @@ render task logs its unused stack every 16 tiles.
 `builddate.h`'s bd_name() needed the same room for GCC's
 format-truncation check as 0006: the IDF build is the first to compile
 it.
+
+### 0010 -- portalweb and dnsreply
+
+Milestone 3 starts with the setup portal, so that a network can be added
+here and not only in defeatist. This is its untrusted-input half,
+host-tested before anything uses it.
+
+**From defeatist, not from original/.** The original's portal.cpp is
+Arduino WebServer and DNSServer, so it does not port. Defeatist's is
+the same design rewritten on plain ESP-IDF for this board and this C6,
+with everything that parses a byte from a phone pulled out to run under
+the sanitizers: portalweb.c (the form's fields, HTML escaping, which
+secret to try first) and dnsreply.c (the lie every captive portal tells
+about every name). Both are copied from defeatist-music-player at
+74535ca with their test, test/portalwebtest.c. The one change is the
+access point's name, "Aimless-XXXX", so the two programs are told apart
+in a phone's list; the test checks for it.
