@@ -95,3 +95,39 @@ static inline int32_t bd_parse_name(const char *s)
     if (m < 1 || m > 12 || d < 1 || d > 31) return 0;
     return bd_days(y, m, d);
 }
+
+/*
+ * Which build to open, the decision netremote_update() makes (0019).
+ *
+ *   BD_PINNED       AIMLESS_PINNED_BUILD is set: that, always
+ *   BD_RECORDED     the one in build.txt
+ *   BD_DISCOVER     probe back from today for the newest
+ *   BD_WAIT_DATE    a probe is needed and there is no date yet
+ *
+ * The recorded build is kept for REFRESH_DAYS after it was adopted, as
+ * the original did, so its tile cache stays good -- unless the server
+ * has said it is gone (HTTP 404). Protomaps keeps only a recent run of
+ * daily builds, so a card that has been in a drawer for two months holds
+ * the name of one that no longer exists, and before 0019 it asked for it
+ * every 30 s and was refused every time.
+ *
+ * `adopted` 0 is "not known": a build.txt from the original, whose day
+ * count was from year 0, or one saved before there was a date. Its age
+ * is then the build's own date, from its name, which is older than its
+ * adoption and so never younger than the truth.
+ */
+typedef enum { BD_PINNED = 0, BD_RECORDED, BD_DISCOVER, BD_WAIT_DATE } bd_choice_t;
+
+static inline bd_choice_t bd_choose(bool pinned, const char *recorded, bool gone,
+                                    int32_t today, int32_t adopted, int refresh_days)
+{
+    if (pinned) return BD_PINNED;
+    const bool have = recorded && recorded[0];
+    if (have && !gone) {
+        const int32_t since = adopted ? adopted : bd_parse_name(recorded);
+        /* No date, or no way to age it: keep it rather than strand the
+         * cache waiting for a probe that needs a date too. */
+        if (!today || !since || today - since < refresh_days) return BD_RECORDED;
+    }
+    return today ? BD_DISCOVER : BD_WAIT_DATE;
+}

@@ -55,6 +55,10 @@ static bool             s_arc_open;
 static tilecache_t      s_cache;
 static int64_t          s_retry_at;
 static bool             s_said_no_date;
+/* The HTTP status of the last range request, 0 when it got none; and
+ * whether the recorded build has been answered 404 (0019). */
+static int              s_last_code;
+static bool             s_gone;
 
 static esp_http_client_handle_t s_http;
 static char             s_url[160];
@@ -101,6 +105,7 @@ static int range_once(const char *url, uint64_t off, uint32_t len, uint8_t *dst,
                       bool *reused)
 {
     *reused = s_http != NULL;
+    s_last_code = 0;
     if (!pool_ready(url)) return -1;
     if (esp_http_client_set_url(s_http, url) != ESP_OK) { pool_drop(); return -1; }
     char range[64];
@@ -112,6 +117,7 @@ static int range_once(const char *url, uint64_t off, uint32_t len, uint8_t *dst,
     if (esp_http_client_open(s_http, 0) != ESP_OK) { pool_drop(); return -1; }
     const int64_t clen = esp_http_client_fetch_headers(s_http);
     const int code = esp_http_client_get_status_code(s_http);
+    s_last_code = code;
     /* 206 or nothing: a 200 is the whole archive on its way. */
     if (code != 206) {
         if (code == 200) ESP_LOGW(TAG, "server ignored Range; refusing the body");
@@ -326,34 +332,46 @@ void netremote_update(tilesrc_t *s)
     today_from_clock();
 
     const bool pinned = CONFIG_AIMLESS_PINNED_BUILD[0] != 0;
-    const bool aged = !pinned && s_arc_open && s_today && s_adopted &&
-                      s_today - s_adopted >= REFRESH_DAYS;
-    if (s_arc_open && !aged) { s->remote = &s_arc; return; }
+    /* builddate.h's bd_choose() is the rule, host-tested (0019). An open
+     * archive is kept while the rule still picks it. */
+    bool aged = false;
+    if (s_arc_open) {
+        const bd_choice_t c = bd_choose(pinned, s_build, false, s_today, s_adopted, REFRESH_DAYS);
+        if (c == BD_PINNED || c == BD_RECORDED) { s->remote = &s_arc; return; }
+        aged = true;
+    }
 
     s->remote = NULL;
     if (now_ms() < s_retry_at) return;
     s_retry_at = now_ms() + RETRY_MS;
 
     char want[16] = "";
-    if (pinned) {
+    switch (bd_choose(pinned, s_build, s_gone, s_today, s_adopted, REFRESH_DAYS)) {
+    case BD_PINNED:
         snprintf(want, sizeof(want), "%s", CONFIG_AIMLESS_PINNED_BUILD);
-    } else if (s_build[0] && !aged &&
-               (!s_today || !s_adopted || s_today - s_adopted < REFRESH_DAYS)) {
+        break;
+    case BD_RECORDED:
         snprintf(want, sizeof(want), "%s", s_build);
-    } else if (!s_today) {
+        break;
+    case BD_WAIT_DATE:
         if (!s_said_no_date) {
             ESP_LOGI(TAG, "no date yet (GNSS or SNTP); the network waits for one");
             s_said_no_date = true;
         }
         return;
-    } else if (!discover(want)) {
-        return;
+    case BD_DISCOVER:
+        if (s_build[0] && !s_gone) {
+            const int32_t since = s_adopted ? s_adopted : bd_parse_name(s_build);
+            ESP_LOGI(TAG, "build %s is %ld days old; looking again", s_build,
+                     (long)(s_today - since));
+        }
+        if (!discover(want)) return;
+        break;
     }
 
-    if (aged) ESP_LOGI(TAG, "build %s is %ld days old; looking again", s_build,
-                       (long)(s_today - s_adopted));
     const bool changed = strcmp(want, s_build) != 0;
     if (changed && s_build[0]) ESP_LOGI(TAG, "build %s -> %s, old cache removed", s_build, want);
+    if (changed) s_gone = false;
     close_remote(changed);
     snprintf(s_build, sizeof(s_build), "%s", want);
     if (changed || !s_adopted || aged) {
@@ -363,6 +381,19 @@ void netremote_update(tilesrc_t *s)
     if (open_build()) {
         s_retry_at = 0;
         s->remote = &s_arc;
+    } else if (s_last_code == 404) {
+        /* Gone from the server, not unreachable: look for a newer one at
+         * once rather than ask for this one every RETRY_MS for ever. The
+         * cache stays until a replacement opens, so its tiles still draw
+         * meanwhile. */
+        if (pinned) {
+            ESP_LOGW(TAG, "pinned build %s is not on the server; change "
+                          "\"Pinned build\" in menuconfig", s_build);
+        } else {
+            ESP_LOGW(TAG, "build %s is no longer on the server; looking for a newer one", s_build);
+            s_gone = true;
+            s_retry_at = 0;
+        }
     }
     s->cache = tilecache_is_open(&s_cache) ? &s_cache : NULL;
 }

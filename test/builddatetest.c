@@ -43,6 +43,32 @@ int main(void)
     CHECK(bd_parse_name("v4.3.0") == 0, "pinned version is not a date");
     CHECK(bd_parse_name("202601051") == 0, "nine digits refused");
 
+    /* 0019: which build to open. */
+    {
+        const int32_t today = bd_days(2026, 10, 8);
+        CHECK(bd_choose(true, "20260820", true, today, 0, 30) == BD_PINNED, "pinned wins");
+        CHECK(bd_choose(false, "", false, today, 0, 30) == BD_DISCOVER, "nothing recorded");
+        CHECK(bd_choose(false, "", false, 0, 0, 30) == BD_WAIT_DATE, "nothing recorded, no date");
+        CHECK(bd_choose(false, "20261005", false, today, bd_days(2026, 10, 5), 30) == BD_RECORDED,
+              "recorded and young");
+        CHECK(bd_choose(false, "20261005", false, today, bd_days(2026, 9, 1), 30) == BD_DISCOVER,
+              "adopted 37 days ago");
+        /* The board's case: build.txt from the original, adoption unknown,
+         * the build itself 49 days old. */
+        CHECK(bd_choose(false, "20260820", false, today, 0, 30) == BD_DISCOVER,
+              "an unknown adoption is aged by the build's name");
+        CHECK(bd_choose(false, "20261001", false, today, 0, 30) == BD_RECORDED,
+              "unknown adoption, a recent build");
+        /* Gone from the server: probe, whatever its age; wait for a date. */
+        CHECK(bd_choose(false, "20261005", true, today, bd_days(2026, 10, 5), 30) == BD_DISCOVER,
+              "a 404 means look again");
+        CHECK(bd_choose(false, "20261005", true, 0, 0, 30) == BD_WAIT_DATE, "gone, no date");
+        /* No date: keep using what is recorded. */
+        CHECK(bd_choose(false, "20260820", false, 0, 0, 30) == BD_RECORDED, "no date, keep it");
+        /* A recorded name that is not a date, adoption unknown: keep it. */
+        CHECK(bd_choose(false, "v4.3.0", false, today, 0, 30) == BD_RECORDED, "not a date");
+    }
+
     printf("builddatetest: %d checks, %d failures\n", checks, failures);
     return failures != 0;
 }

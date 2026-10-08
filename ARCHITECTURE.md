@@ -533,3 +533,35 @@ past 4096 MB.
 
 The first build after this patch needs a clean configure (rm -rf build)
 so that components/fatfs exists before IDF scans for components.
+
+### 0019 -- a recorded build that is gone
+
+Seen on the board: a card whose build.txt named 20260820, read on
+2026-10-08. Protomaps keeps only a recent run of daily builds, so that
+one was gone, and every 30 s the program asked for it and got HTTP 404:
+
+    netremote: last build 20260820
+    W netremote: range 0+127: HTTP 404
+    W netremote: remote 20260820: read failed
+
+for as long as it ran. Two things kept it there. The 30-day refresh
+counted from the adoption day, and that was 0 -- build.txt was the
+original's, whose day count is from year 0, which 0009 reads as
+unknown -- and an unknown adoption never aged. And nothing treated a 404
+as different from an unreachable server.
+
+**Now:** the choice is bd_choose() in builddate.h, host-tested. An
+unknown adoption is aged by the build's own date, from its name. And an
+open that fails with a 404 marks the recorded build gone, so the next
+pass probes back from today for the newest instead (a pinned build is
+not replaced: it says to change the pin). The old build's tile cache is
+kept until a replacement opens, so its tiles still draw meanwhile, and
+removed when one does, as before.
+
+The original had the same rule and the same gap.
+
+Host: builddatetest's choice checks (11), the board's case among them.
+Device: netremote.c compiled -fsyntax-only for the P4 as before. On the
+board, with that card: "build 20260820 is 49 days old; looking again",
+"probing build 20261008: ok", "build 20260820 -> 20261008, old cache
+removed", "remote build 20261008 open".
