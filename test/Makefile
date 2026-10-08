@@ -4,6 +4,8 @@
 # fixture.pmtiles, which make_fixture.py writes (committed, so only a C
 # compiler is needed here).
 #
+# nmeatest: main/nmea.h, the GNSS module's sentences.
+#
 # -fno-sanitize=shift: raster.c converts to fixed point with
 # `v << RS_FRAC_BITS` on signed values that can be negative (geometry
 # outside the tile). That is undefined in C11 and does the arithmetic
@@ -24,7 +26,7 @@ LDFLAGS := -fsanitize=address,undefined -fno-sanitize=shift -lm
 CORE_SRCS := $(CORE)/src/inflate.c $(CORE)/src/mvt.c $(CORE)/src/pmtiles.c \
              $(CORE)/src/raster.c $(CORE)/src/style.c $(CORE)/src/tile_grid.c
 
-all: run-maptile
+all: run-maptile run-nmea
 
 maptiletest: maptiletest.c ../main/maptile.c ../main/maptile.h $(CORE_SRCS) fixture.pmtiles
 	$(CC) $(CFLAGS) -o $@ maptiletest.c ../main/maptile.c $(CORE_SRCS) $(LDFLAGS)
@@ -32,7 +34,13 @@ maptiletest: maptiletest.c ../main/maptile.c ../main/maptile.h $(CORE_SRCS) fixt
 run-maptile: maptiletest
 	cd $(CURDIR) && ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./maptiletest
 
-clean:
-	rm -f maptiletest
+nmeatest: nmeatest.c ../main/nmea.h
+	$(CC) $(CFLAGS) -o $@ nmeatest.c $(LDFLAGS)
 
-.PHONY: all run-maptile clean
+run-nmea: nmeatest
+	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./nmeatest
+
+clean:
+	rm -f maptiletest nmeatest
+
+.PHONY: all run-maptile run-nmea clean
