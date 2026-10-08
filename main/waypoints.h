@@ -12,7 +12,9 @@
  * turn to take, but it is never wrong about which way the point is.
  *
  * THE FILE is the original's /waypoints.bin, byte for byte, so a card
- * that held points under the original keeps them: an 8-byte header
+ * that held points under the original keeps them -- named waypoints.dat
+ * since 0022, so M5Launcher does not list it as firmware, and renamed
+ * from the original's name on first read: an 8-byte header
  * ("WPT1" as a little-endian u32, version 1, a u16 count) and a 48-byte
  * record per point -- lat and lon as doubles, a 24-byte name, the time
  * it was saved as an int64 (0 when the clock was not set). Little-endian

@@ -36,6 +36,7 @@
 #include <string.h>
 #include <strings.h>
 #include <time.h>
+#include <sys/stat.h>
 
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
@@ -423,15 +424,31 @@ static void draw_setup(void)
 
 /* ---- saved points (0017) ---- */
 
-/* src: original/waypoints.cpp WP_PATH, at the card's root. */
-#define WP_PATH     STORAGE_SD_MOUNT "/waypoints.bin"
+/* The original's WP_PATH was /waypoints.bin. Not .bin here (0022):
+ * M5Launcher lists every .bin on the card as firmware to install, and
+ * this runs under it. The contents are unchanged, and a card with the
+ * original's file has it renamed on first read (file_adopt()). */
+#define WP_PATH     STORAGE_SD_MOUNT "/waypoints.dat"
+#define WP_OLD      STORAGE_SD_MOUNT "/waypoints.bin"
 #define WP_TMP      STORAGE_SD_MOUNT "/waypoints.tmp"
+
+/* If `path` is not on the card and the original's `old` is, rename the
+ * one to the other: same bytes, a name M5Launcher will not offer to
+ * flash (0022). */
+static void file_adopt(const char *old, const char *path)
+{
+    struct stat st;
+    if (stat(path, &st) == 0 || stat(old, &st) != 0) return;
+    if (rename(old, path) == 0) ESP_LOGI(TAG, "renamed %s to %s", old, path);
+    else ESP_LOGW(TAG, "could not rename %s to %s", old, path);
+}
 
 static uint8_t s_wp_file[WP_FILE_MAX];
 
 static void wp_read(void)
 {
     wp_init(&s_wp);
+    file_adopt(WP_OLD, WP_PATH);
     FILE *f = fopen(WP_PATH, "rb");
     if (!f) return;
     const size_t n = fread(s_wp_file, 1, sizeof(s_wp_file), f);
@@ -477,8 +494,10 @@ static int64_t utc_now(const gnss_fix_t *fix)
 
 /* ---- the last known position (0021) ---- */
 
-/* src: original/tab5_map.cpp LASTFIX_PATH, at the card's root. */
-#define LASTFIX_PATH    STORAGE_SD_MOUNT "/lastfix.bin"
+/* The original's LASTFIX_PATH was /lastfix.bin; .dat here for the
+ * reason WP_PATH gives (0022). */
+#define LASTFIX_PATH    STORAGE_SD_MOUNT "/lastfix.dat"
+#define LASTFIX_OLD     STORAGE_SD_MOUNT "/lastfix.bin"
 /* src: original/tab5_map.cpp: written on a good fix at most every ten
  * minutes -- a boot position does not need to be fresher, and the card
  * does not need the writes. */
@@ -486,6 +505,7 @@ static int64_t utc_now(const gnss_fix_t *fix)
 
 static bool lastfix_read(double *lat, double *lon)
 {
+    file_adopt(LASTFIX_OLD, LASTFIX_PATH);
     FILE *f = fopen(LASTFIX_PATH, "rb");
     if (!f) return false;
     uint8_t b[LASTFIX_BYTES];

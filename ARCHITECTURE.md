@@ -637,3 +637,18 @@ LAT,LON from the last known position" after the archives, then "world:
 the map has a picture; backdrop freed" when the first overview or tile
 for that place lands; a first boot, with no lastfix.bin, frees it only
 after the fix.
+
+### 0022 -- no .bin files on the card
+
+This runs under M5Launcher, and M5Launcher lists every .bin on the card
+as firmware to install. Two files this writes had the original's names,
+waypoints.bin (0017) and lastfix.bin (0021): a saved-points list
+offered for flashing.
+
+They are waypoints.dat and lastfix.dat now, with the same bytes. A card
+that has the original's .bin and not the .dat has it renamed on first
+read, so points and the last position carry over -- after which the
+original program no longer finds them under its names, which is the
+trade for a Launcher menu without them. Nothing else written to the
+card ends in .bin: the tile cache is <build>.dat and .idx, and
+build.txt.
