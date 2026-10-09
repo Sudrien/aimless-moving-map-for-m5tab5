@@ -21,3 +21,4 @@ test/areatest
 test/aoptest
 test/maplabeltest
 test/placestest
+test/motiontest

@@ -76,8 +76,15 @@ What works:
   name is kept between towns rather than flickering; the neighbourhood
   is dropped once you are a kilometre or so from it.
 
-Not yet: zoom levels other than 14, the compass, Wi-Fi location. See
-`ARCHITECTURE.md`.
+- Speed: above walking pace a short needle on the marker points along
+  the course. The receiver solves once a second at vehicle speeds,
+  every two seconds walking and every five standing still, which saves
+  power without losing the fix. Parked and untouched for two minutes,
+  the backlight steps down to 40 % of its level; a touch, or setting
+  off, brings it back.
+
+Not yet: zoom levels other than 14, the compass and the module's
+accelerometer, Wi-Fi location. See `ARCHITECTURE.md`.
 
 What this keeps on the card is hidden, as Defeatist's is: dotted names
 with the FAT hidden attribute set, so they are not the first thing you

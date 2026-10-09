@@ -46,6 +46,9 @@
 # placestest: main/places.c, the status line's place names, and
 # tilesrc_fetch() and maprender_points(), which feed it, on the fixture.
 #
+# motiontest: main/motion.c, the receiver's rate by speed and the parked
+# dim.
+#
 # -fno-sanitize=shift: raster.c converts to fixed point with
 # `v << RS_FRAC_BITS` on signed values that can be negative (geometry
 # outside the tile). That is undefined in C11 and does the arithmetic
@@ -70,7 +73,7 @@ CORE_SRCS := $(CORE)/src/inflate.c $(CORE)/src/mvt.c $(CORE)/src/pmtiles.c \
 TILE_SRCS := ../main/maptile.c ../main/maplabel.c
 TILE_DEPS := $(TILE_SRCS) ../main/maptile.h ../main/maplabel.h
 
-all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop run-maplabel run-places
+all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop run-maplabel run-places run-motion
 
 maptiletest: maptiletest.c $(TILE_DEPS) $(CORE_SRCS) fixture.pmtiles
 	$(CC) $(CFLAGS) -o $@ maptiletest.c $(TILE_SRCS) $(CORE_SRCS) $(LDFLAGS)
@@ -169,7 +172,13 @@ placestest: placestest.c ../main/places.c ../main/places.h ../main/tilesrc.c ../
 run-places: placestest
 	cd $(CURDIR) && ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./placestest
 
-clean:
-	rm -f placestest maplabeltest areatest lastfixtest maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest suntest uirowtest waypointstest worldtiletest worldtile.bin aoptest
+motiontest: motiontest.c ../main/motion.c ../main/motion.h ../main/waypoints.c ../main/waypoints.h
+	$(CC) $(CFLAGS) -o $@ motiontest.c ../main/motion.c ../main/waypoints.c $(LDFLAGS)
 
-.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop run-maplabel run-places clean
+run-motion: motiontest
+	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./motiontest
+
+clean:
+	rm -f motiontest placestest maplabeltest areatest lastfixtest maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest suntest uirowtest waypointstest worldtiletest worldtile.bin aoptest
+
+.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop run-maplabel run-places run-motion clean

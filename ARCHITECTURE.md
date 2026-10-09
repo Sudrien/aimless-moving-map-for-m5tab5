@@ -34,6 +34,8 @@ does.
   and the layout half of its draw_labels().
 - **places** (`main/places.c`): the status line's "Locality, Region",
   from z12 and z6 blocks of place points. The original's place lookup.
+- **motion** (`main/motion.c`): the receiver's rate by speed, and the
+  parked dim. The original's gnssRatePolicy() and idleDimmed().
 - **tilesrc** (`main/tilesrc.c`): which source a tile comes from -- the
   cache, the card, the network. The original's netsource_get().
 - **tilecache** (`main/tilecache.c`): tiles fetched over the network,
@@ -925,3 +927,38 @@ against IDF 5.5.1 and the feckless libraries at their pinned tags; not
 built, and not run on the board. On the board: "places: z12/... block,
 N of 9 tiles read, N places" and the same for z6 soon after the first
 fix, and the place leading the status line.
+
+### 0031 -- speed: the receiver's rate, the parked dim, the needle
+
+Three things the original decided from speed, none of which the port
+did: gnss_set_rate_ms() was there from 0004 and nothing called it.
+
+**motion.c**, host-tested, is original/tab5_map.cpp's gnssRatePolicy():
+FAST (1 s) at 12 km/h and up, with no fix, with a 2D one and while the
+area cache walks; WALK (2 s) from 4 km/h; IDLE (5 s) below. A band must
+hold 10 s, and changes are 10 s apart. And its idleDimmed(): two
+minutes untouched with the rate settled at IDLE dims the backlight to
+40 % of the level in force (not below 12 %, the original's 30 of 255,
+and never above the level itself); a tap, or 25 m from an anchor that
+rolls every 30 s, ends it at once. All the original's judgements,
+recorded as such in original/PROVENANCE.md.
+
+Two departures. The original also checked a distance against the
+M135's accelerometer and let handling the device undim it; there is no
+IMU code here yet, and without one the original trusted the distance,
+as this does -- so standing still, only a touch brings the screen back.
+And the anchor is kept up while the screen is touched, where the
+original's test returned first and left it to go stale.
+
+**aimless.c**: motion_step() on the main loop sends the rate and sets
+the dim; apply_light() takes the dim on whatever level the sun or the
+overrides chose, as applyIdleDim() took brightnessWanted(). The marker
+gets the original's needle above 3 km/h, along the course, reaching
+17 px past the ring.
+
+Host: motiontest (30 checks), wrapping millisecond counters included.
+Device: motion.c and aimless.c compiled with -c at -Og, -Os and -O2 for
+the P4; not built, and not run on the board. On the board: "gnss: rate
+5000 ms" ten seconds after stopping with a 3D fix, "rate 1000 ms" ten
+seconds after moving off; "bright: idle dim on" two minutes after the
+last touch while parked, and "off" on a touch.

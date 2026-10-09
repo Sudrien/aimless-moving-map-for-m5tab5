@@ -69,6 +69,7 @@
 #include "mapset.h"
 #include "maptile.h"
 #include "mapview.h"
+#include "motion.h"
 #include "places.h"
 #include "style.h"
 #include "sun.h"
@@ -189,6 +190,10 @@ static bool        s_screen_off;
 /* Names on the map (0029). src: original/mapengine.cpp g_labels_on: on
  * until turned off, and not kept across a restart, as the other rows. */
 static bool        s_labels = true;
+/* The parked dim (0031): when the screen was last touched, in ms, and
+ * whether the backlight is dimmed for it now. */
+static uint32_t    s_touch_ms;
+static bool        s_idle_dim;
 
 /*
  * Place names (0030). Two indexes, the z12 block's localities and
@@ -1260,6 +1265,17 @@ static void draw(const gnss_fix_t *fix)
         if (fabs(ox) < gfx_w() && fabs(oy) < gfx_h()) {
             const int cx = gfx_w() / 2 + (int)lround(ox), cy = gfx_h() / 2 + (int)lround(oy);
             draw_guide(vx, vy, cx, cy);
+            /* src: original/mapengine.cpp draw_marker(): above 3 km/h, a
+             * needle along the course, 26 px from the middle of a 9 px
+             * dot -- 17 px past it, here past this dot's ring. Below that
+             * a parked receiver's course is noise, or empty and 0. */
+            if (fix->speed_kmh > 3.0) {
+                const double a = fix->course * M_PI / 180.0;
+                const double len = MARKER_R + 3 + 17;
+                const double ex = cx + len * sin(a), ey = cy - len * cos(a);
+                thick_line(cx, cy, ex, ey, 3.0, COL_RING);
+                thick_line(cx, cy, ex, ey, 1.5, gnss_fine(fix) ? COL_FINE : COL_COARSE);
+            }
             gfx_fill_circle(cx, cy, MARKER_R + 3, COL_RING);
             gfx_fill_circle(cx, cy, MARKER_R, gnss_fine(fix) ? COL_FINE : COL_COARSE);
         }
@@ -1572,7 +1588,10 @@ static void apply_light(bool sun_dark, int sun_pct)
                   : s_theme == UI_THEME_NIGHT  ? BRIGHT_NIGHT_PCT
                   : s_theme == UI_THEME_DAY    ? BACKLIGHT_PCT
                   : sun_pct;
-    backlight(pct);
+    /* Parked and untouched: a step down from whatever is in force, the
+     * overrides included -- the original's applyIdleDim() on
+     * brightnessWanted(). */
+    backlight(s_idle_dim ? motion_dim_pct(pct) : pct);
 }
 
 /* Where the sun is asked about: the fix, or the last known position
@@ -1919,6 +1938,12 @@ static void ui_touch(const gnss_fix_t *fix)
     was_down = down;
     if (!tap) return;
     const int W = gfx_w(), H = gfx_h();
+    /* Any tap, the wake included: original handleTouch(). */
+    s_touch_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    if (s_idle_dim) {
+        s_idle_dim = false;
+        s_dirty = true;
+    }
 
     if (s_screen_off) {
         if (ui_wake_zone(x, y, W, H)) { screen_on(); touch_swallow(); }
@@ -1976,6 +2001,38 @@ static void ui_touch(const gnss_fix_t *fix)
         break;
     default:
         break;
+    }
+}
+
+/*
+ * The receiver's rate and the parked dim, from the fix (0031):
+ * original/tab5_map.cpp gnssRatePolicy() and applyIdleDim(), as
+ * motion.h has them. The rate is FAST while the area cache walks, as
+ * there while prefetching.
+ */
+static void motion_step(const gnss_fix_t *fix)
+{
+    static motion_rate_t rate;
+    static motion_idle_t idle;
+    const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const bool busy = s_area.active;
+    xSemaphoreGive(s_lock);
+
+    const uint16_t want = motion_rate_want(gnss_coarse(fix), fix->mode, fix->speed_kmh, busy);
+    const uint16_t set = motion_rate_step(&rate, want, gnss_rate_ms(), now);
+    if (set) {
+        gnss_set_rate_ms(set);
+        ESP_LOGI(TAG, "gnss: rate %u ms (%.1f km/h, mode %d)", set, fix->speed_kmh, fix->mode);
+    }
+
+    const bool dim = !s_screen_off &&
+                     motion_idle(&idle, now, s_touch_ms, gnss_coarse(fix) && fix->mode == 3,
+                                 fix->lat, fix->lon, gnss_rate_ms());
+    if (dim != s_idle_dim) {
+        s_idle_dim = dim;
+        s_dirty = true;
+        ESP_LOGI(TAG, "bright: idle dim %s", dim ? "on" : "off");
     }
 }
 
@@ -2169,6 +2226,7 @@ void app_main(void)
         sentence_rate();
         setup_step();
         ui_touch(&fix);
+        motion_step(&fix);
         lastfix_keep(&fix);
         ttff_report(&fix);
         aop_keep(&fix);
