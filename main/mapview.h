@@ -26,6 +26,13 @@
  * sampled at compose time instead and the slot is left alone. Two
  * buffers, so the one on screen is never the one being drawn.
  *
+ * LABELS (0029). One maplabel_set_t per pixel buffer, filled when a
+ * tile is drawn into that buffer. Keyed by the buffer, not the slot: a
+ * shift hands buffers between slots (tile_grid.h), and a kept tile's
+ * names have to stay with its pixels. Only a READY slot's are laid out,
+ * as the original's draw_labels(): any other slot's buffer is not what
+ * is on the screen, and may be being drawn into.
+ *
  * SPDX-License-Identifier: MIT
  */
 #pragma once
@@ -34,6 +41,7 @@
 #include <stdint.h>
 
 #include "mapconfig.h"
+#include "maplabel.h"
 #include "mapset.h"
 #include "tile_grid.h"
 
@@ -50,6 +58,7 @@ typedef struct {
     void         *draw_ctx;
     tile_grid_t   grid;
     uint16_t     *bufs[GRID_COUNT];
+    maplabel_set_t *labels[GRID_COUNT];   /* bufs[i]'s; none until set */
     render_job_t  jobs[GRID_COUNT];
     int           njobs;
     uint8_t       z;
@@ -118,6 +127,22 @@ int  mapview_pending(const mapview_t *v);
  * failure has no pixels to recolour and is left as it is.
  */
 void mapview_restyle(mapview_t *v, uint16_t background);
+
+/* Turn labels on: `sets` are GRID_COUNT sets, the i'th for the i'th of
+ * mapview_init()'s bufs. Emptied here. */
+void mapview_set_labels(mapview_t *v, maplabel_set_t *const *sets);
+
+/* The set that goes with pixel buffer `px` -- what mapview_take()
+ * handed out -- for the draw to fill; NULL without labels. */
+maplabel_set_t *mapview_labels_for(const mapview_t *v, const uint16_t *px);
+
+/*
+ * The READY tiles' label sets, and where each tile's top-left corner is
+ * in the w x h window mapview_compose() makes, for maplabel_layout().
+ * `out` holds GRID_COUNT. Returns how many. The sets are the view's:
+ * lay them out under the same lock as the compose.
+ */
+int  mapview_label_srcs(const mapview_t *v, int w, int h, maplabel_src_t *out);
 
 /* Turn the overview on: two COARSE_PX x COARSE_PX RGB565 buffers. */
 void mapview_set_coarse(mapview_t *v, uint16_t *a, uint16_t *b);

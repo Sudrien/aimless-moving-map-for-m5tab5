@@ -40,6 +40,9 @@
 # picked out of an NMEA stream, captured and walked, and the original's
 # /aopdb.bin.
 #
+# maplabeltest: main/maplabel.c, names collected from the fixture and laid
+# out over the window -- rank order, collisions, the map band, UTF-8 cuts.
+#
 # -fno-sanitize=shift: raster.c converts to fixed point with
 # `v << RS_FRAC_BITS` on signed values that can be negative (geometry
 # outside the tile). That is undefined in C11 and does the arithmetic
@@ -60,10 +63,14 @@ LDFLAGS := -fsanitize=address,undefined -fno-sanitize=shift -lm
 CORE_SRCS := $(CORE)/src/inflate.c $(CORE)/src/mvt.c $(CORE)/src/pmtiles.c \
              $(CORE)/src/raster.c $(CORE)/src/style.c $(CORE)/src/tile_grid.c
 
-all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop
+# maptile.c collects labels into maplabel.c's sets (0029).
+TILE_SRCS := ../main/maptile.c ../main/maplabel.c
+TILE_DEPS := $(TILE_SRCS) ../main/maptile.h ../main/maplabel.h
 
-maptiletest: maptiletest.c ../main/maptile.c ../main/maptile.h $(CORE_SRCS) fixture.pmtiles
-	$(CC) $(CFLAGS) -o $@ maptiletest.c ../main/maptile.c $(CORE_SRCS) $(LDFLAGS)
+all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop run-maplabel
+
+maptiletest: maptiletest.c $(TILE_DEPS) $(CORE_SRCS) fixture.pmtiles
+	$(CC) $(CFLAGS) -o $@ maptiletest.c $(TILE_SRCS) $(CORE_SRCS) $(LDFLAGS)
 
 run-maptile: maptiletest
 	cd $(CURDIR) && ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./maptiletest
@@ -74,14 +81,14 @@ nmeatest: nmeatest.c ../main/nmea.h
 run-nmea: nmeatest
 	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./nmeatest
 
-mapviewtest: mapviewtest.c ../main/mapview.c ../main/mapview.h ../main/mapset.c ../main/mapset.h ../main/maptile.c $(CORE_SRCS) fixture.pmtiles
-	$(CC) $(CFLAGS) -o $@ mapviewtest.c ../main/mapview.c ../main/mapset.c ../main/maptile.c $(CORE_SRCS) $(LDFLAGS)
+mapviewtest: mapviewtest.c ../main/mapview.c ../main/mapview.h ../main/mapset.c ../main/mapset.h $(TILE_SRCS) $(CORE_SRCS) fixture.pmtiles
+	$(CC) $(CFLAGS) -o $@ mapviewtest.c ../main/mapview.c ../main/mapset.c $(TILE_SRCS) $(CORE_SRCS) $(LDFLAGS)
 
 run-mapview: mapviewtest
 	cd $(CURDIR) && ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./mapviewtest
 
-tilesrctest: tilesrctest.c ../main/tilesrc.c ../main/tilesrc.h ../main/tilecache.c ../main/tilecache.h ../main/mapset.c ../main/maptile.c $(CORE_SRCS) fixture.pmtiles
-	$(CC) $(CFLAGS) -o $@ tilesrctest.c ../main/tilesrc.c ../main/tilecache.c ../main/mapset.c ../main/maptile.c $(CORE_SRCS) $(LDFLAGS)
+tilesrctest: tilesrctest.c ../main/tilesrc.c ../main/tilesrc.h ../main/tilecache.c ../main/tilecache.h ../main/mapset.c $(TILE_SRCS) $(CORE_SRCS) fixture.pmtiles
+	$(CC) $(CFLAGS) -o $@ tilesrctest.c ../main/tilesrc.c ../main/tilecache.c ../main/mapset.c $(TILE_SRCS) $(CORE_SRCS) $(LDFLAGS)
 
 run-tilesrc: tilesrctest
 	cd $(CURDIR) && ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./tilesrctest
@@ -122,8 +129,8 @@ waypointstest: waypointstest.c ../main/waypoints.c ../main/waypoints.h
 run-waypoints: waypointstest
 	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./waypointstest
 
-worldtiletest: worldtiletest.c ../main/worldtile.c ../main/worldtile.h ../main/maptile.c $(CORE_SRCS) fixture.pmtiles
-	$(CC) $(CFLAGS) -o $@ worldtiletest.c ../main/worldtile.c ../main/maptile.c $(CORE_SRCS) $(LDFLAGS)
+worldtiletest: worldtiletest.c ../main/worldtile.c ../main/worldtile.h $(TILE_SRCS) $(CORE_SRCS) fixture.pmtiles
+	$(CC) $(CFLAGS) -o $@ worldtiletest.c ../main/worldtile.c $(TILE_SRCS) $(CORE_SRCS) $(LDFLAGS)
 
 run-worldtile: worldtiletest ../tools/fetch_worldtile.py
 	cd $(CURDIR) && python3 -I ../tools/fetch_worldtile.py worldtile.bin --file fixture.pmtiles --zxy 14/4823/6160
@@ -135,8 +142,8 @@ lastfixtest: lastfixtest.c ../main/lastfix.c ../main/lastfix.h
 run-lastfix: lastfixtest
 	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./lastfixtest
 
-areatest: areatest.c ../main/area.c ../main/area.h ../main/mapset.c ../main/maptile.c $(CORE_SRCS) fixture.pmtiles
-	$(CC) $(CFLAGS) -o $@ areatest.c ../main/area.c ../main/mapset.c ../main/maptile.c $(CORE_SRCS) $(LDFLAGS)
+areatest: areatest.c ../main/area.c ../main/area.h ../main/mapset.c $(TILE_SRCS) $(CORE_SRCS) fixture.pmtiles
+	$(CC) $(CFLAGS) -o $@ areatest.c ../main/area.c ../main/mapset.c $(TILE_SRCS) $(CORE_SRCS) $(LDFLAGS)
 
 run-area: areatest
 	cd $(CURDIR) && ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./areatest
@@ -147,7 +154,13 @@ aoptest: aoptest.c ../main/ubx.c ../main/ubx.h ../main/aop.c ../main/aop.h
 run-aop: aoptest
 	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./aoptest
 
-clean:
-	rm -f areatest lastfixtest maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest suntest uirowtest waypointstest worldtiletest worldtile.bin aoptest
+maplabeltest: maplabeltest.c ../main/mapview.c ../main/mapview.h ../main/mapset.c $(TILE_DEPS) $(CORE_SRCS) fixture.pmtiles
+	$(CC) $(CFLAGS) -o $@ maplabeltest.c ../main/mapview.c ../main/mapset.c $(TILE_SRCS) $(CORE_SRCS) $(LDFLAGS)
 
-.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop clean
+run-maplabel: maplabeltest
+	cd $(CURDIR) && ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./maplabeltest
+
+clean:
+	rm -f maplabeltest areatest lastfixtest maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest suntest uirowtest waypointstest worldtiletest worldtile.bin aoptest
+
+.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop run-maplabel clean

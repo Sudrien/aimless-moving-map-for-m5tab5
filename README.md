@@ -66,7 +66,12 @@ What works:
   every half hour with a good fix and pushed back at boot, for up to
   three days. The very first start, with nothing saved, is not helped.
 
-Not yet: labels and place names. See `ARCHITECTURE.md`.
+- Labels: the names of towns, neighbourhoods and points of interest
+  from the tiles, drawn over the map with a halo, the bigger places
+  first and anything that would overlap left out.
+
+Not yet: the place name in the status line ("Locality, Region"), and
+regions and countries named at this zoom. See `ARCHITECTURE.md`.
 
 What this keeps on the card is hidden, as Defeatist's is: dotted names
 with the FAT hidden attribute set, so they are not the first thing you
@@ -99,7 +104,7 @@ Along the bottom, five buttons, as the original had them:
   "offline" when the cards' own archives already cover the square. With
   no network it reads "wifi set", and a tap opens Wi-Fi setup.
 - **settings** -- the palette (auto, day, night), the brightness (auto,
-  low, medium, high) and the Wi-Fi network. Tap a row to change it, and
+  low, medium, high), labels (on, off) and the Wi-Fi network. Tap a row to change it, and
   anywhere outside the panel to close it. The overrides last until the
   next restart.
 - **screen off** -- the backlight goes off; GNSS and tile downloads carry

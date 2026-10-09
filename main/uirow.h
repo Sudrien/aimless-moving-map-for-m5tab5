@@ -66,9 +66,10 @@ bool ui_wake_zone(int px, int py, int sw, int sh);
 
 /* ---- the settings panel ---- */
 
-/* The original's rows, less the compass's two, labels and Wi-Fi location,
- * which come with their features. */
-enum { UI_SET_THEME = 0, UI_SET_BRIGHT, UI_SET_WIFI, UI_SET_COUNT };
+/* The original's rows, less the compass's two and Wi-Fi location, which
+ * come with their features. Labels (0029) where the original had them,
+ * after brightness. */
+enum { UI_SET_THEME = 0, UI_SET_BRIGHT, UI_SET_LABELS, UI_SET_WIFI, UI_SET_COUNT };
 
 /* src: original/tab5_map.cpp SP_ROW_H, SP_HEAD_H, SP_FOOT_H. */
 #define UI_SP_ROW_H     (62)

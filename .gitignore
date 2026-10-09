@@ -19,3 +19,4 @@ test/worldtile.bin
 test/lastfixtest
 test/areatest
 test/aoptest
+test/maplabeltest

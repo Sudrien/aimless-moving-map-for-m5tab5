@@ -234,6 +234,50 @@ void mapview_restyle(mapview_t *v, uint16_t background)
     if (v->cz_busy) v->cz_void = true;
 }
 
+/* ---- labels ---- */
+
+void mapview_set_labels(mapview_t *v, maplabel_set_t *const *sets)
+{
+    for (int i = 0; i < GRID_COUNT; i++) {
+        v->labels[i] = sets[i];
+        maplabel_reset(sets[i]);
+    }
+}
+
+maplabel_set_t *mapview_labels_for(const mapview_t *v, const uint16_t *px)
+{
+    for (int i = 0; i < GRID_COUNT; i++)
+        if (v->bufs[i] == px) return v->labels[i];
+    return NULL;
+}
+
+/* The window's top-left in grid pixels, as mapview_compose() puts it. */
+static void window_origin(const mapview_t *v, int w, int h, int *left, int *top)
+{
+    const double gx = (v->fx - v->grid.origin.x) * SUBTILE_PX;
+    const double gy = (v->fy - v->grid.origin.y) * SUBTILE_PX;
+    *left = (int)floor(gx) - w / 2;
+    *top  = (int)floor(gy) - h / 2;
+}
+
+int mapview_label_srcs(const mapview_t *v, int w, int h, maplabel_src_t *out)
+{
+    if (!v->placed || !v->grid.initialised) return 0;
+    int left, top, n = 0;
+    window_origin(v, w, h, &left, &top);
+    for (int i = 0; i < GRID_COUNT; i++) {
+        const subtile_t *s = &v->grid.slots[i];
+        if (s->state != TILE_READY) continue;
+        const maplabel_set_t *set = mapview_labels_for(v, s->pixels);
+        if (!set) continue;
+        out[n].set = set;
+        out[n].x = (i % GRID_N) * SUBTILE_PX - left;
+        out[n].y = (i / GRID_N) * SUBTILE_PX - top;
+        n++;
+    }
+    return n;
+}
+
 bool mapview_take(mapview_t *v, render_job_t *job, uint16_t **px)
 {
     if (v->njobs == 0) return false;
@@ -288,11 +332,9 @@ void mapview_compose(const mapview_t *v, uint16_t *fb, int w, int h, int stride)
         for (int x = 0; x < w; x++) fb[(size_t)y * stride + x] = v->background;
     if (!v->placed || !v->grid.initialised) return;
 
-    /* The position in grid pixels, and the window's top-left. */
-    const double gx = (v->fx - v->grid.origin.x) * SUBTILE_PX;
-    const double gy = (v->fy - v->grid.origin.y) * SUBTILE_PX;
-    const int left = (int)floor(gx) - w / 2;
-    const int top  = (int)floor(gy) - h / 2;
+    /* The window's top-left, in grid pixels. */
+    int left, top;
+    window_origin(v, w, h, &left, &top);
 
     for (int r = 0; r < GRID_N; r++) {
         for (int c = 0; c < GRID_N; c++) {

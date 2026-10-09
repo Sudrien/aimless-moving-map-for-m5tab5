@@ -23,7 +23,7 @@
  *                 settings and saved points panels, the setup box over
  *                 the map, saved points and the guide to one, touch
  *
- * What the original did that this does not yet: labels, place names,
+ * What the original did that this does not yet: place names,
  * zoom levels other than z14, the compass, waypoints, Wi-Fi location,
  * the world map floor, the night palette's automatic switch.
  * ARCHITECTURE.md has the milestones.
@@ -183,6 +183,9 @@ static bool        s_sun_dark;      /* what the sun alone says, for the panel */
 static int         s_backlight = -1;    /* percent in force; -1 to reapply */
 static bool        s_panel;         /* the settings panel is open */
 static bool        s_screen_off;
+/* Names on the map (0029). src: original/mapengine.cpp g_labels_on: on
+ * until turned off, and not kept across a restart, as the other rows. */
+static bool        s_labels = true;
 /* Pan: the view follows an anchor, which is the marker until a pan moves
  * it (original/mapengine.cpp g_anchor_wx). In tiles at VIEW_ZOOM. */
 static bool        s_panning;
@@ -941,6 +944,14 @@ static void row_text(int i, char *name, char *value, char *note, uint16_t *chip)
                  s_bright == UI_BRIGHT_AUTO ? ", set by the sun" : "");
         *chip = s_bright == UI_BRIGHT_AUTO ? COL_CHIP_AUTO : COL_CHIP_SET;
         break;
+    case UI_SET_LABELS:
+        /* src: original/tab5_map.cpp setRowText()'s SET_LABELS, but not
+         * "place names": that is the status line's readout, still to come. */
+        snprintf(name, 40, "labels");
+        snprintf(value, 40, "%s", s_labels ? "on" : "off");
+        snprintf(note, 80, "names drawn over the map - instant either way");
+        *chip = s_labels ? COL_CHIP_SET : COL_BTN;
+        break;
     case UI_SET_WIFI: {
         char ssid[33];
         const bool joined = wifi_sta_ssid(ssid, sizeof(ssid));
@@ -1052,6 +1063,54 @@ static void draw_pins_panel(const gnss_fix_t *fix)
     }
 }
 
+/* ---- labels (0029) ---- */
+
+/* What the last compose laid out, drawn after the lock is let go. In
+ * BSS: forty of them are past CLAUDE.md's few hundred bytes of stack. */
+static maplabel_placed_t s_placed[MAPLABEL_ON_SCREEN];
+static int               s_nplaced;
+
+/* Under s_lock, after mapview_compose(): the READY tiles' names laid out
+ * over the map band, as the original's draw_labels() did its layout. */
+static void labels_layout(void)
+{
+    static maplabel_src_t src[GRID_COUNT];
+    s_nplaced = 0;
+    if (!s_labels) return;
+    const int n = mapview_label_srcs(&s_view, gfx_w(), gfx_h(), src);
+    s_nplaced = maplabel_layout(src, n, SUBTILE_PX, gfx_w(), STATUS_H, ui_map_bottom(gfx_h()),
+                                ARK12_H, gfx_text_w, s_placed, MAPLABEL_ON_SCREEN);
+}
+
+/*
+ * src: original/mapengine.cpp draw_poi_dot(), draw_one_label(),
+ * label_ink(), label_halo(). The ink is the style table's own colour for
+ * the point, so a label matches what the tile would have drawn; the halo
+ * is near-white by day and near-black by night, the only pair that
+ * separates from water, park and building fills alike, eight ways round
+ * at 2 px so the diagonals of an A or a V are not left bare. A POI gets
+ * a ringed dot under its name: the rasteriser does not draw one
+ * (style.c, has_fill 0) so that turning labels off takes the dots too.
+ * Under the saved points and the marker, as there.
+ */
+static void draw_labels(void)
+{
+    const uint16_t halo = s_dark ? RGB(0, 0, 0) : RGB(255, 255, 255);
+    for (int i = 0; i < s_nplaced; i++) {
+        const maplabel_placed_t *p = &s_placed[i];
+        const uint16_t ink = STYLES[p->style].fill;
+        if (p->style == S_POI) {
+            gfx_fill_circle(p->ax, p->ay, MAPLABEL_DOT_R, halo);
+            gfx_fill_circle(p->ax, p->ay, MAPLABEL_DOT_R - 1, ink);
+            gfx_fill_circle(p->ax, p->ay, 2, halo);
+        }
+        for (int dy = -2; dy <= 2; dy += 2)
+            for (int dx = -2; dx <= 2; dx += 2)
+                if (dx || dy) gfx_draw_text(p->tx + dx, p->ty + dy, p->text, p->scale, p->tw, halo);
+        gfx_draw_text(p->tx, p->ty, p->text, p->scale, p->tw, ink);
+    }
+}
+
 /* A thick line, as a quadrilateral: gfx has no line. */
 static void thick_line(double x0, double y0, double x1, double y1, double half, uint16_t c)
 {
@@ -1151,8 +1210,13 @@ static void draw(const gnss_fix_t *fix)
         s_world = NULL;
         ESP_LOGI(TAG, "world: the map has a picture; backdrop freed");
     }
-    if (s_world) worldtile_compose(s_world, SUBTILE_PX, gfx_fb(), gfx_w(), gfx_h(), gfx_w());
-    else mapview_compose(&s_view, gfx_fb(), gfx_w(), gfx_h(), gfx_w());
+    if (s_world) {
+        worldtile_compose(s_world, SUBTILE_PX, gfx_fb(), gfx_w(), gfx_h(), gfx_w());
+        s_nplaced = 0;
+    } else {
+        mapview_compose(&s_view, gfx_fb(), gfx_w(), gfx_h(), gfx_w());
+        labels_layout();
+    }
     const int pending = mapview_pending(&s_view);
     const double vx = s_view.fx, vy = s_view.fy;
     xSemaphoreGive(s_lock);
@@ -1160,6 +1224,7 @@ static void draw(const gnss_fix_t *fix)
      * unless a pan has moved the view; off the screen it is not drawn.
      * No marker without a fix -- a remembered or seeded position is a
      * claim, not a placeholder (original/mapengine.cpp). */
+    draw_labels();
     draw_pins_on_map(vx, vy);
     if (gnss_coarse(fix) && s_mark_ok) {
         const double ox = (s_mark_x - vx) * SUBTILE_PX, oy = (s_mark_y - vy) * SUBTILE_PX;
@@ -1285,6 +1350,9 @@ static void render_task(void *arg)
         uint16_t *cz_px = NULL;
         const bool cz_took = mapview_coarse_take(&s_view, &cz_id, &cz_px);
         const bool took = !cz_took && mapview_take(&s_view, &job, &px);
+        /* The names go with the pixels: this buffer's set, and only for
+         * a grid tile -- the overview and the area cache want none. */
+        s_render.labels = took ? mapview_labels_for(&s_view, px) : NULL;
         xSemaphoreGive(s_lock);
 
         if (cz_took) {
@@ -1312,6 +1380,7 @@ static void render_task(void *arg)
         const int64_t t0 = esp_timer_get_time();
         tilesrc_from_t from;
         const tile_state_t t = tilesrc_draw(&s_src, &s_render, job.id, px, SUBTILE_SPLIT, &from);
+        s_render.labels = NULL;
 
         xSemaphoreTake(s_lock, portMAX_DELAY);
         mapview_commit(&s_view, &job, t);
@@ -1673,6 +1742,11 @@ static void row_tap(int row)
         s_bright = ui_bright_next(s_bright);
         ESP_LOGI(TAG, "brightness: %d", (int)s_bright);
         break;
+    case UI_SET_LABELS:
+        /* A repaint, not a render: the names are drawn over the tiles. */
+        s_labels = !s_labels;
+        ESP_LOGI(TAG, "labels: %s", s_labels ? "on" : "off");
+        break;
     case UI_SET_WIFI:
         /* The portal, as at boot; the panel closes so the box shows. */
         s_panel = false;
@@ -1931,6 +2005,15 @@ void app_main(void)
         uint16_t *cz_b = mem_big((size_t)COARSE_PX * COARSE_PX * sizeof(uint16_t));
         if (cz_a && cz_b) mapview_set_coarse(&s_view, cz_a, cz_b);
         else ESP_LOGW(TAG, "no overview: out of PSRAM");
+    }
+    /* A label set for each tile buffer, 2.5 KB each (0029). Without
+     * them the map runs as before, with no names. */
+    {
+        maplabel_set_t *sets[GRID_COUNT];
+        bool ok = true;
+        for (int i = 0; i < GRID_COUNT; i++) ok &= (sets[i] = mem_big(sizeof(maplabel_set_t))) != NULL;
+        if (ok) mapview_set_labels(&s_view, sets);
+        else ESP_LOGW(TAG, "no labels: out of PSRAM");
     }
     ESP_LOGI(TAG, "%d tiles of %d px in PSRAM; %u KB PSRAM, %u KB internal left",
              GRID_COUNT, SUBTILE_PX,

@@ -29,6 +29,9 @@ does.
   tile. The original's "local archives".
 - **mapview** (`main/mapview.c`): the 2 x 2 grid of 1280 px subtiles
   around the position, its queue, and the window of it on screen.
+- **maplabel** (`main/maplabel.c`): names collected while a tile is
+  drawn, and laid out over the window. The original's label collector
+  and the layout half of its draw_labels().
 - **tilesrc** (`main/tilesrc.c`): which source a tile comes from -- the
   cache, the card, the network. The original's netsource_get().
 - **tilecache** (`main/tilecache.c`): tiles fetched over the network,
@@ -818,3 +821,55 @@ no saved database" on the first boot; after five minutes of good fix,
 "navigation database: N records, N bytes" and "aop: saved database";
 on the next boot, "navigation database pushed" and a first-fix line
 saying "assisted".
+
+### 0029 -- labels
+
+The original's names on the map: towns, neighbourhoods and POIs from
+the tiles' `places` and `pois` layers, drawn over the composed window,
+not into the tiles -- so a name can cross a tile seam, collisions are
+culled over the whole screen, and turning them off is a repaint.
+
+**maplabel.c** is original/mapengine.cpp's MapLabel, LabelSet and
+label_add(), and the layout half of draw_labels(), host-tested. Its
+capacities are the original's: 40 bytes of name, 48 a tile, 40 on the
+screen. The layout is the original's -- rank by rank, country first and
+POIs last, a POI's name above its dot, a label dropped if its box hits
+one placed -- with two departures. A name too long is cut at a UTF-8
+character, where label_add() cut at a byte and could leave half a
+letter. And a box must be wholly inside the map band: the original
+clipped to the band, and gfx cannot clip, so half a name would sit under
+the status bar and show between the buttons.
+
+**maptile.c** collects, as the original's rl_part(): with
+`maprender_t.labels` set, every named point in `pois` and `places`
+inside the subtile goes into that set, and `name_key` is set for those
+two passes only. NULL, the default, collects nothing; the overview, the
+area cache and the world tile leave it so.
+
+**mapview.c** keeps a set per pixel buffer, not per slot. The
+original's worker drew into a spare and swapped it in, carrying a set
+with it; here the worker draws straight into a PENDING slot's buffer,
+and a shift hands buffers between slots, so the set is the buffer's.
+Only a READY slot's names are laid out, as the original's: any other
+slot's buffer is not on the screen and may be being drawn into.
+
+**aimless.c** lays out under the view's lock, right after the compose,
+into a static array, and draws after the lock goes: under the saved
+points and the marker, as the original. The text is feckless-graphics'
+ark12, which scales only by whole numbers: 2 for POIs and
+neighbourhoods, 3 for towns and up, standing in for the original's
+FreeSans at 9 and 12 pt and its bold. The ink is the style table's
+colour for the point, the halo near-white by day and near-black by
+night, eight ways round at 2 px; a POI gets the original's ringed dot.
+A settings row, "labels", turns them on and off. It is not the
+original's "place names": that name is kept for the status line's
+"Locality, Region", which is not here yet, and with it the z12 place
+index the original built for it.
+
+Host: maplabeltest (77 checks), and every test that links maptile.c
+links maplabel.c. Device: maplabel.c, maptile.c, mapview.c and
+aimless.c compiled with -c at -Og, -Os and -O2 for the P4 against IDF
+5.5.1 and the feckless libraries at their pinned tags; not built, and
+not run on the board. On the board: names over the map once tiles are
+drawn; "labels: off" in the log and none on the screen after the
+settings row.

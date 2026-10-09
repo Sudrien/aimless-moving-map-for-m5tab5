@@ -5,9 +5,10 @@
  * open an archive through a read callback (netsource.cpp's fit_buffers()
  * and gz_inflate()), and render a tile from it (mapengine.cpp's
  * render_tile()) -- fetch, check it is gzip, inflate, then decode the
- * MVT once per layer in draw order and rasterise each pass. Labels,
- * the network and the tile cache are not here; this is the offline path
- * from a file on the card to pixels.
+ * MVT once per layer in draw order and rasterise each pass. The network
+ * and the tile cache are not here; this is the offline path from a file
+ * on the card to pixels. Labels are collected here (0029) but drawn
+ * elsewhere: see maplabel.h.
  *
  * Free of ESP-IDF. Memory comes from the caller's allocator, so the
  * firmware can put the big buffers in PSRAM and the hot ones in internal
@@ -20,6 +21,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "maplabel.h"
 #include "pmtiles.h"
 #include "raster.h"
 #include "tile_grid.h"
@@ -71,6 +73,10 @@ typedef struct {
     uint8_t   *val;
     const char **val_name;
     uint16_t  *val_name_len;
+    /* Where the next tile's named points go, as the original's
+     * w_label_dst; NULL, as maprender_init() leaves it, for none -- the
+     * overview and the area cache want no names (0029). */
+    maplabel_set_t *labels;
     /* For the log, from the last call. */
     uint32_t   last_bytes, last_inflated;
     int        max_size;        /* what the scratch was made for */
@@ -111,7 +117,9 @@ tile_state_t maprender_tile(maprender_t *r, maparchive_t *a, tile_id_t id,
  * TILE_ERROR as above, px not involved.
  *
  * maprender_payload() draws the `len` bytes already in r->tile: the gzip
- * check, the inflate and the passes. TILE_NODATA for len 0.
+ * check, the inflate and the passes. TILE_NODATA for len 0. With
+ * r->labels set, that set is emptied and then filled with the tile's
+ * named POIs and places, whatever the result.
  */
 tile_state_t maprender_fetch(maprender_t *r, maparchive_t *a, tile_id_t id,
                              int split, uint32_t *len);

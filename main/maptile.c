@@ -162,6 +162,7 @@ void maprender_free(maprender_t *r)
 typedef struct {
     rs_t       *rs;
     const char *want;
+    maplabel_set_t *labels;
 } pass_t;
 
 static int pass_layer(void *ctx, const mvt_layer_t *l)
@@ -171,9 +172,23 @@ static int pass_layer(void *ctx, const mvt_layer_t *l)
            memcmp(l->name, p->want, l->name_len) == 0;
 }
 
+/*
+ * rl_part() in the original: the part is drawn either way, and a named
+ * point is also kept for the label overlay, in the fraction of this
+ * subtile it falls at. One outside the subtile's source rectangle is a
+ * sibling's to label (maplabel_add() drops it), or a name would appear
+ * once for every subtile one data tile feeds.
+ */
 static int pass_part(void *ctx, const mvt_part_t *part)
 {
     const pass_t *p = ctx;
+    if (p->labels && part->name && part->n_pts >= 1 &&
+        part->geom == MVT_POINT && style_is_labelled(part->style)) {
+        const rs_t *r = p->rs;
+        const float fx = (float)(part->pts[0] - r->src_x0) / (float)r->src_span;
+        const float fy = (float)(part->pts[1] - r->src_y0) / (float)r->src_span;
+        maplabel_add(p->labels, fx, fy, part->style, part->name, part->name_len);
+    }
     return rs_part(p->rs, part);
 }
 
@@ -213,6 +228,7 @@ tile_state_t maprender_payload(maprender_t *r, uint32_t got, tile_id_t id,
                                uint16_t *px, int split)
 {
     r->last_bytes = r->last_inflated = 0;
+    maplabel_reset(r->labels);
     if (got == 0) return TILE_NODATA;
     if (got > r->tile_cap) return TILE_ERROR;
     r->last_bytes = got;
@@ -250,7 +266,7 @@ tile_state_t maprender_payload(maprender_t *r, uint32_t got, tile_id_t id,
     rs.styles = STYLES; rs.n_styles = S_COUNT;
     rs.cur_feature = -1;
 
-    pass_t pass = { .rs = &rs, .want = NULL };
+    pass_t pass = { .rs = &rs, .want = NULL, .labels = r->labels };
     mvt_decoder_t d;
     memset(&d, 0, sizeof(d));
     d.layer_cb = pass_layer;
@@ -265,6 +281,11 @@ tile_state_t maprender_payload(maprender_t *r, uint32_t got, tile_id_t id,
     rs_clear(&rs, style_background());
     for (int i = 0; i < N_DRAW_ORDER; i++) {
         pass.want = DRAW_ORDER[i];
+        /* src: original/mapengine.cpp render_tile(): names only for the
+         * two layers that have any, or a value-string table is built for
+         * roads and buildings too, the layers with the most values. */
+        d.name_key = r->labels && (strcmp(pass.want, "pois") == 0 ||
+                                   strcmp(pass.want, "places") == 0) ? "name" : NULL;
         mvt_decode(&d, r->mvt, mlen);
         rs_flush(&rs);
     }
