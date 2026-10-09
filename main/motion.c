@@ -35,8 +35,14 @@ uint16_t motion_rate_step(motion_rate_t *s, uint16_t want, uint16_t current, uin
     return want;
 }
 
+bool motion_handled(const handling_t *imu, uint32_t now_ms)
+{
+    return imu && imu->moved_ms && now_ms - imu->moved_ms < MOTION_HANDLED_MS;
+}
+
 bool motion_idle(motion_idle_t *s, uint32_t now_ms, uint32_t last_touch_ms,
-                 bool fix3d, double lat, double lon, uint16_t rate_ms)
+                 bool fix3d, double lat, double lon, uint16_t rate_ms,
+                 const handling_t *imu)
 {
     /* The anchor is kept up whether or not a touch has been recent, as
      * the original's was not -- it returned on the touch first, and its
@@ -58,13 +64,16 @@ bool motion_idle(motion_idle_t *s, uint32_t now_ms, uint32_t last_touch_ms,
         s->lat = lat;
         s->lon = lon;
         s->since = now_ms;
-        return false;
+        /* Believed only if something shook: a veto, never an undim of
+         * its own. */
+        if (!imu || (imu->stir_ms && now_ms - imu->stir_ms < MOTION_STIR_MS)) return false;
     } else if (now_ms - s->since >= MOTION_ANCHOR_MS) {
         s->lat = lat;
         s->lon = lon;
         s->since = now_ms;
     }
     if (now_ms - last_touch_ms < MOTION_IDLE_MS) return false;
+    if (motion_handled(imu, now_ms)) return false;
     return fix3d && rate_ms == MOTION_RATE_IDLE_MS;
 }
 

@@ -36,6 +36,8 @@ does.
   from z12 and z6 blocks of place points. The original's place lookup.
 - **motion** (`main/motion.c`): the receiver's rate by speed, and the
   parked dim. The original's gnssRatePolicy() and idleDimmed().
+- **handling** (`main/handling.c`), **imu** (`main/imu.c`): the Tab5's
+  own BMI270, accelerometer only, saying when the device is handled.
 - **tilesrc** (`main/tilesrc.c`): which source a tile comes from -- the
   cache, the card, the network. The original's netsource_get().
 - **tilecache** (`main/tilecache.c`): tiles fetched over the network,
@@ -47,7 +49,7 @@ does.
 - **ffread** (`main/ffread.c`): a file read through FatFs directly.
 - **aimless** (`main/aimless.c`): boot, the loop, the drawing.
 
-Everything but gnss.c, ffread.c, netremote.c and aimless.c is free of ESP-IDF and
+Everything but gnss.c, ffread.c, netremote.c, imu.c and aimless.c is free of ESP-IDF and
 tested by `make -C test`.
 
 ## Milestones
@@ -962,3 +964,50 @@ the P4; not built, and not run on the board. On the board: "gnss: rate
 5000 ms" ten seconds after stopping with a 3D fix, "rate 1000 ms" ten
 seconds after moving off; "bright: idle dim on" two minutes after the
 last touch while parked, and "off" on a touch.
+
+### 0032 -- the accelerometer, for the parked dim
+
+0031's gap closed: standing still, picking the device up brings the
+screen back, and a 25 m "move" nothing felt does not.
+
+The Tab5's own BMI270 at 0x68, not the M135's at 0x69 the original
+used. Its reason for the module's part was the magnetometer, which had
+to share the accelerometer's frame for tilt compensation; that never
+gave a trustworthy heading where the module is mounted, and none of it
+is ported -- no heading, no calibration, no log. The board's own part
+is there with or without a module, with no EXT5V to switch.
+
+**handling.c** is the accelerometer half of original/compass.cpp's
+compass_update(), host-tested: a low-passed gravity vector at 10 Hz,
+handled when a reading departs from it by 1500 counts for two samples,
+stirred when by 500 for one. The original's thresholds, measured on the
+M135's BMI270 in a Tab5; the same part and range in the same body, but
+not the same spot, so the largest departure every 10 s goes in the log
+to check them against.
+
+**motion.c** takes it, as the original's idleDimmed(): handled within
+15 s holds the screen up, and a 25 m move counts only with a stir in the
+last 60 s -- indoors the position wanders tens of metres on a good HDOP,
+and real travel is never silent. Without an accelerometer, as before.
+
+**imu.c** is Bosch's bring-up by hand, accelerometer only, each value
+from BMI270_SensorAPI at a pinned commit: reset; power save off; the
+8 KB configuration image uploaded 64 bytes a burst at its word address;
+INTERNAL_STATUS checked, since a driver's OK is not the image having
+taken; 50 Hz, +-2 g. The original used Bosch's whole driver because its
+magnetometer sat behind the BMI270's auxiliary I2C master, the part that
+was hard to drive; the accelerometer needs none of it.
+
+The image is Bosch's, BSD-3-Clause, so it is not in the repository:
+**tools/fetch_bmi270_config.py** takes the array out of bmi270.c at the
+pinned commit, checks its SHA-256, and the build embeds it as it does
+the world tile (0020). No network at the first configure, no image, and
+the firmware runs without an accelerometer. LICENSE-BMI270 carries
+Bosch's notice, which a firmware with the image has to.
+
+Host: motiontest (49 checks, 19 more), bmi270tooltest (6). Device:
+imu.c, handling.c, motion.c and aimless.c compiled with -c at -Og, -Os
+and -O2 for the P4; not built, and not run on the board. On the board:
+"imu: BMI270 at 0x68: configured", then every 10 s "imu: peak N counts"
+-- a few hundred on a desk, thousands when picked up -- and "bright:
+idle dim off (handled)" on picking it up while dimmed.

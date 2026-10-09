@@ -37,13 +37,32 @@ elseif(NOT EXISTS "${AIMLESS_WORLD}.tried")
     file(WRITE "${AIMLESS_WORLD}.tried" "")
 endif()
 
+# The BMI270's configuration image (0032): Bosch's, BSD-3-Clause, fetched
+# once into the build directory by tools/fetch_bmi270_config.py and
+# embedded, as the world tile is. Without network, an empty file: the
+# firmware then has no accelerometer, and dims on touch and distance alone.
+set(AIMLESS_BMI270 "${CMAKE_BINARY_DIR}/bmi270_config.bin")
+if(CMAKE_BUILD_EARLY_EXPANSION)
+    if(NOT EXISTS "${AIMLESS_BMI270}")
+        file(WRITE "${AIMLESS_BMI270}" "")
+    endif()
+elseif(NOT EXISTS "${AIMLESS_BMI270}.tried")
+    idf_build_get_property(_aimless_py PYTHON)
+    execute_process(
+        COMMAND "${_aimless_py}" -I "${CMAKE_CURRENT_LIST_DIR}/../tools/fetch_bmi270_config.py"
+                "${AIMLESS_BMI270}"
+        OUTPUT_VARIABLE _aimless_out ERROR_VARIABLE _aimless_err)
+    message(STATUS "${_aimless_err}${_aimless_out}")
+    file(WRITE "${AIMLESS_BMI270}.tried" "")
+endif()
+
 idf_component_register(
-    SRCS "aimless.c" "gnss.c" "ffread.c" "maptile.c" "maplabel.c" "places.c" "motion.c" "mapset.c" "mapview.c" "tilecache.c" "tilesrc.c" "netremote.c"
+    SRCS "aimless.c" "gnss.c" "ffread.c" "maptile.c" "maplabel.c" "places.c" "motion.c" "handling.c" "imu.c" "mapset.c" "mapview.c" "tilecache.c" "tilesrc.c" "netremote.c"
          "portal.c" "portalweb.c" "dnsreply.c" "wifijoin.c" "launcher_import.c" "launcherkey.c"
          "sun.c" "uirow.c" "waypoints.c" "worldtile.c" "lastfix.c" "area.c" "ubx.c" "aop.c"
     INCLUDE_DIRS "."
-    EMBED_FILES "${AIMLESS_WORLD}"
+    EMBED_FILES "${AIMLESS_WORLD}" "${AIMLESS_BMI270}"
     REQUIRES mapcore feckless_drivers feckless_graphics_handler feckless_storage_handler feckless_network_handler
-             esp_driver_uart esp_driver_gpio esp_timer fatfs esp_app_format esp_http_client mbedtls nvs_flash
+             esp_driver_uart esp_driver_gpio esp_driver_i2c esp_timer fatfs esp_app_format esp_http_client mbedtls nvs_flash
              esp_http_server lwip app_update spi_flash ${AIMLESS_JSON}
 )

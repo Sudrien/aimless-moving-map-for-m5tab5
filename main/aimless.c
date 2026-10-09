@@ -68,6 +68,8 @@
 #include "mapconfig.h"
 #include "mapset.h"
 #include "maptile.h"
+#include "handling.h"
+#include "imu.h"
 #include "mapview.h"
 #include "motion.h"
 #include "places.h"
@@ -194,6 +196,10 @@ static bool        s_labels = true;
  * whether the backlight is dimmed for it now. */
 static uint32_t    s_touch_ms;
 static bool        s_idle_dim;
+/* The Tab5's accelerometer (0032): whether it came up, and what it says
+ * about being handled. Main loop only. */
+static bool        s_imu;
+static handling_t  s_hand;
 
 /*
  * Place names (0030). Two indexes, the z12 block's localities and
@@ -1943,6 +1949,7 @@ static void ui_touch(const gnss_fix_t *fix)
     if (s_idle_dim) {
         s_idle_dim = false;
         s_dirty = true;
+        ESP_LOGI(TAG, "bright: idle dim off (touched)");
     }
 
     if (s_screen_off) {
@@ -2026,13 +2033,25 @@ static void motion_step(const gnss_fix_t *fix)
         ESP_LOGI(TAG, "gnss: rate %u ms (%.1f km/h, mode %d)", set, fix->speed_kmh, fix->mode);
     }
 
+    /* src: original/compass.cpp compass_update(): 10 Hz. */
+    static uint32_t imu_at;
+    if (s_imu && now - imu_at >= HANDLING_PERIOD_MS) {
+        int16_t ax, ay, az;
+        imu_at = now;
+        if (imu_read(&ax, &ay, &az)) handling_sample(&s_hand, ax, ay, az, now);
+    }
+
+    const handling_t *imu = s_imu ? &s_hand : NULL;
     const bool dim = !s_screen_off &&
                      motion_idle(&idle, now, s_touch_ms, gnss_coarse(fix) && fix->mode == 3,
-                                 fix->lat, fix->lon, gnss_rate_ms());
+                                 fix->lat, fix->lon, gnss_rate_ms(), imu);
     if (dim != s_idle_dim) {
         s_idle_dim = dim;
         s_dirty = true;
-        ESP_LOGI(TAG, "bright: idle dim %s", dim ? "on" : "off");
+        /* Which way out, as the original's: a spurious "moved away" is a
+         * receiver wandering, a spurious "handled" a threshold too low. */
+        ESP_LOGI(TAG, "bright: idle dim %s%s", dim ? "on" : "off",
+                 dim ? "" : motion_handled(imu, now) ? " (handled)" : " (moved away)");
     }
 }
 
@@ -2062,6 +2081,13 @@ void app_main(void)
         touch_set_rotation(VIEW_ROTATION);
     else
         ESP_LOGW(TAG, "no touch this boot");
+    /* The accelerometer (0032), for the parked dim. Its image was
+     * fetched when the firmware was built; without it, none. */
+    {
+        extern const uint8_t bmi270_start[] asm("_binary_bmi270_config_bin_start");
+        extern const uint8_t bmi270_end[]   asm("_binary_bmi270_config_bin_end");
+        s_imu = imu_begin(tab5io_bus(), bmi270_start, (size_t)(bmi270_end - bmi270_start));
+    }
 
     /* The render scratch and the grid's buffers, now rather than after
      * the card and the network, so the world can be drawn into one of
@@ -2249,6 +2275,11 @@ void app_main(void)
             ESP_LOGI(TAG, "fix %c mode %d, %d sats, HDOP %.1f, %s, PPS %u",
                      fix.status, fix.mode, fix.sats, fix.hdop, rate,
                      (unsigned)gnss_pps_count());
+            /* The largest jolt in the last 10 s, for setting handling.h's
+             * thresholds against this board (0032). */
+            if (s_imu)
+                ESP_LOGI(TAG, "imu: peak %.0f counts (handled over %.0f, stirred over %.0f)",
+                         handling_peak_take(&s_hand), HANDLING_MOTION_COUNTS, HANDLING_STIR_COUNTS);
             ESP_LOGI(TAG, "net %s, build %s%s, %u requests (%u connections, %u failed), "
                           "%u KB, last %u ms; tiles %u cache, %u card, %u network, %u errors",
                      route, ns.build[0] ? ns.build : "none", ns.open ? " open" : "",

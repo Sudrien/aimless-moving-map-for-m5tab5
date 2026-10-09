@@ -1,9 +1,11 @@
 /*
  * motiontest.c -- main/motion.c: the receiver's rate by speed, settled
- * and spaced, and the parked dim's way in and ways out.
+ * and spaced, and the parked dim's way in and ways out; main/handling.c,
+ * the accelerometer's handled and stirred, and what they do to the dim.
  *
  * SPDX-License-Identifier: MIT
  */
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -93,16 +95,16 @@ static void idle(void)
     const uint16_t I = MOTION_RATE_IDLE_MS;
 
     /* Untouched under two minutes: no. */
-    CHECK(!motion_idle(&s, t, touch, true, lat, lon, I), "dim at once");
+    CHECK(!motion_idle(&s, t, touch, true, lat, lon, I, NULL), "dim at once");
     t = touch + MOTION_IDLE_MS - 1;
-    CHECK(!motion_idle(&s, t, touch, true, lat, lon, I), "dim before two minutes");
+    CHECK(!motion_idle(&s, t, touch, true, lat, lon, I, NULL), "dim before two minutes");
     t = touch + MOTION_IDLE_MS;
-    CHECK(motion_idle(&s, t, touch, true, lat, lon, I), "no dim at two minutes");
+    CHECK(motion_idle(&s, t, touch, true, lat, lon, I, NULL), "no dim at two minutes");
     /* Not while the rate says moving, nor without a 3D fix. */
-    CHECK(!motion_idle(&s, t, touch, true, lat, lon, MOTION_RATE_WALK_MS), "dim walking");
-    CHECK(!motion_idle(&s, t, touch, false, lat, lon, I), "dim with no fix");
+    CHECK(!motion_idle(&s, t, touch, true, lat, lon, MOTION_RATE_WALK_MS, NULL), "dim walking");
+    CHECK(!motion_idle(&s, t, touch, false, lat, lon, I, NULL), "dim with no fix");
     /* A touch ends it. */
-    CHECK(!motion_idle(&s, t + 1, t, true, lat, lon, I), "dim after a touch");
+    CHECK(!motion_idle(&s, t + 1, t, true, lat, lon, I, NULL), "dim after a touch");
 
     /* Parked receiver wander -- 10 m about the spot for minutes, the
      * anchor rolling -- does not undim. */
@@ -112,7 +114,7 @@ static void idle(void)
     bool all = true;
     for (int i = 0; i < 300; i++, t += 1000) {
         const double d = (i % 3 - 1) * 10.0 * M_LAT;
-        all &= motion_idle(&s, t, touch, true, lat + d, lon, I);
+        all &= motion_idle(&s, t, touch, true, lat + d, lon, I, NULL);
     }
     CHECK(all, "wander undimmed it");
 
@@ -120,7 +122,7 @@ static void idle(void)
      * is still IDLE. */
     double y = lat;
     int fixes = 0;
-    while (motion_idle(&s, t, touch, true, y, lon, I) && fixes < 20) {
+    while (motion_idle(&s, t, touch, true, y, lon, I, NULL) && fixes < 20) {
         y += 8.3 * M_LAT;               /* 30 km/h, a fix a second */
         t += 1000;
         fixes++;
@@ -134,12 +136,12 @@ static void idle(void)
     y = lat;
     all = true;
     for (int i = 0; i < 20; i++, t += 1000, y += 1.0 * M_LAT)
-        all &= motion_idle(&s, t, 0, true, y, lon, I);
+        all &= motion_idle(&s, t, 0, true, y, lon, I, NULL);
     CHECK(all, "20 m of drift over 20 s undimmed it");
 
     /* The first fix after a gap anchors afresh, not against before it. */
-    CHECK(!motion_idle(&s, t, 0, false, 0, 0, I), "no fix, dimmed");
-    CHECK(motion_idle(&s, t + 1000, 0, true, lat + 500 * M_LAT, lon, I),
+    CHECK(!motion_idle(&s, t, 0, false, 0, 0, I, NULL), "no fix, dimmed");
+    CHECK(motion_idle(&s, t + 1000, 0, true, lat + 500 * M_LAT, lon, I, NULL),
           "a jump across a gap counted as moving");
 }
 
@@ -152,12 +154,109 @@ static void level(void)
     CHECK(motion_dim_pct(10) == 10, "10 -> %d: brighter than it was", motion_dim_pct(10));
 }
 
+/* 16384 counts a g, face up: gravity on z. */
+#define G 16384
+
+static void handled(void)
+{
+    printf("handled and stirred\n");
+    handling_t h;
+    memset(&h, 0, sizeof(h));
+    uint32_t t = 1000;
+    /* Desk noise, +-200 counts round gravity, for a minute: nothing. */
+    for (int i = 0; i < 600; i++, t += 100)
+        handling_sample(&h, (int16_t)((i % 5 - 2) * 100), (int16_t)((i % 3 - 1) * 100), G, t);
+    CHECK(h.moved_ms == 0 && h.stir_ms == 0, "desk: moved %u stirred %u", h.moved_ms, h.stir_ms);
+    const float desk = handling_peak_take(&h);
+    CHECK(desk > 100 && desk < 400, "desk peak %.0f", desk);
+    CHECK(handling_peak_take(&h) == 0.0f, "peak not cleared");
+
+    /* A knock: one sample well over, then back. A stir, not handling. */
+    handling_sample(&h, 4000, 0, G, t);
+    t += 100;
+    handling_sample(&h, 0, 0, G, t);
+    CHECK(h.moved_ms == 0, "a single knock counted as handling");
+    CHECK(h.stir_ms == t - 100, "a knock is a stir: %u", h.stir_ms);
+
+    /* Picked up and turned on its side: gravity moves to x. Two samples
+     * over 1500 is handling. */
+    t += 100;
+    handling_sample(&h, G / 2, 0, G * 7 / 8, t);
+    CHECK(h.moved_ms == 0, "one sample of a turn counted");
+    t += 100;
+    handling_sample(&h, G, 0, G / 2, t);
+    CHECK(h.moved_ms == t, "a turn not counted: %u", h.moved_ms);
+
+    /* Held at the new angle, the filter catches up within a few
+     * seconds and it stops counting. */
+    const uint32_t turned = t;
+    for (int i = 0; i < 60; i++) {
+        t += 100;
+        handling_sample(&h, G, 0, 0, t);
+    }
+    CHECK(h.moved_ms > turned && h.moved_ms < t - 2000, "still handled %u ms on", t - h.moved_ms);
+
+    /* Rotation alone: |a| constant, the vector turns. Caught. */
+    handling_t r;
+    memset(&r, 0, sizeof(r));
+    t = 5000;
+    handling_sample(&r, 0, 0, G, t);
+    for (int i = 1; i <= 10; i++) {
+        t += 100;
+        const double a = i * 0.15;
+        handling_sample(&r, (int16_t)(G * sin(a)), 0, (int16_t)(G * cos(a)), t);
+    }
+    CHECK(r.moved_ms != 0, "a pure rotation missed");
+
+    /* Time zero is not "never". */
+    handling_t z;
+    memset(&z, 0, sizeof(z));
+    handling_sample(&z, 0, 0, G, 0xFFFFFFFFu);
+    handling_sample(&z, 9000, 0, G, 0);
+    CHECK(z.stir_ms == 1, "stirred at 0 reads as never: %u", z.stir_ms);
+}
+
+static void dim_with_imu(void)
+{
+    printf("the dim, with an accelerometer\n");
+    const double lat = 42.3, lon = -83.4;
+    const uint16_t I = MOTION_RATE_IDLE_MS;
+    handling_t h;
+    memset(&h, 0, sizeof(h));
+    motion_idle_t s;
+    memset(&s, 0, sizeof(s));
+    uint32_t t = MOTION_IDLE_MS + 1000;
+
+    CHECK(motion_idle(&s, t, 0, true, lat, lon, I, &h), "never handled, not dimmed");
+    CHECK(!motion_handled(&h, t) && !motion_handled(NULL, t), "handled with nothing");
+
+    /* Picked up: undimmed for 15 s, then dims again. */
+    h.moved_ms = t;
+    CHECK(!motion_idle(&s, t, 0, true, lat, lon, I, &h), "handled, still dimmed");
+    CHECK(motion_handled(&h, t + MOTION_HANDLED_MS - 1), "handled not held 15 s");
+    CHECK(!motion_idle(&s, t + MOTION_HANDLED_MS - 1, 0, true, lat, lon, I, &h), "dimmed in the hand");
+    CHECK(motion_idle(&s, t + MOTION_HANDLED_MS, 0, true, lat, lon, I, &h), "not dimmed after 15 s");
+    t += MOTION_HANDLED_MS;
+
+    /* Indoors, the position jumps 40 m and nothing shook: not believed. */
+    CHECK(motion_idle(&s, t + 1000, 0, true, lat + 40 * M_LAT, lon, I, &h),
+          "a silent 40 m jump undimmed it");
+    /* The same with a stir 30 s ago: believed. */
+    h.stir_ms = t;
+    CHECK(!motion_idle(&s, t + 30000, 0, true, lat, lon, I, &h), "a stirred 40 m move not believed");
+    /* A stir over a minute old does not count. */
+    CHECK(motion_idle(&s, t + MOTION_STIR_MS + 1000, 0, true, lat + 40 * M_LAT, lon, I, &h),
+          "a stale stir corroborated");
+}
+
 int main(void)
 {
     want();
     settle();
     idle();
     level();
+    handled();
+    dim_with_imu();
     printf("\nmotiontest: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

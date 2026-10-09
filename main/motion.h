@@ -17,6 +17,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "handling.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -89,6 +91,13 @@ uint16_t motion_rate_step(motion_rate_t *s, uint16_t want, uint16_t current, uin
 #define MOTION_DIM_FLOOR_PCT    (12)
 #define MOTION_UNDIM_MOVE_M     (25.0)
 #define MOTION_ANCHOR_MS        (30000u)
+/* src: original/tab5_map.cpp IDLE_UNDIM_HOLD_MS, IDLE_UNDIM_STIR_MS,
+ * judgements there. Handled in the last 15 s keeps the screen up: long
+ * enough that setting it down mid-glance does not dim it in the hand.
+ * A stir in the last 60 s corroborates a 25 m move: generous, since the
+ * point is to reject a device provably undisturbed for minutes. */
+#define MOTION_HANDLED_MS       (15000u)
+#define MOTION_STIR_MS          (60000u)
 
 typedef struct {
     double   lat, lon;
@@ -105,16 +114,25 @@ typedef struct {
  * dim: a receiver that cannot say whether the device moves has not said
  * it is still.
  *
- * Departs from the original in one way: it also corroborated a distance
- * against the M135's accelerometer, and let a handling of the device
- * undim it. Neither is ported (there is no IMU code here yet), and
- * without one the original took the distance on trust, as this does.
- * And the anchor is kept up while the screen is being touched, where the
- * original left it, so the first test after two minutes is not against
- * an anchor from before them.
+ * With an accelerometer (`imu` not NULL, 0032), two more rules, the
+ * original's: handled within MOTION_HANDLED_MS keeps the screen up --
+ * the way out standing still, where GNSS cannot tell a device in the
+ * hand from one on a seat -- and a 25 m move counts only with a stir
+ * within MOTION_STIR_MS, since indoors the position wanders tens of
+ * metres on a good HDOP and real travel is never silent. Without one, a
+ * distance is taken on trust, as the original did with no compass.
+ *
+ * One departure: the anchor is kept up while the screen is being
+ * touched, where the original left it, so the first test after two
+ * minutes is not against an anchor from before them.
  */
 bool motion_idle(motion_idle_t *s, uint32_t now_ms, uint32_t last_touch_ms,
-                 bool fix3d, double lat, double lon, uint16_t rate_ms);
+                 bool fix3d, double lat, double lon, uint16_t rate_ms,
+                 const handling_t *imu);
+
+/* Whether `imu` says the device was handled within MOTION_HANDLED_MS:
+ * for the log, which says which way out a dim took. */
+bool motion_handled(const handling_t *imu, uint32_t now_ms);
 
 /* The level a dimmed backlight runs at, from the one in force: never
  * brighter than it. */

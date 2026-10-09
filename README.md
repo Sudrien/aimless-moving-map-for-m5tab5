@@ -80,11 +80,14 @@ What works:
   the course. The receiver solves once a second at vehicle speeds,
   every two seconds walking and every five standing still, which saves
   power without losing the fix. Parked and untouched for two minutes,
-  the backlight steps down to 40 % of its level; a touch, or setting
-  off, brings it back.
+  the backlight steps down to 40 % of its level; a touch, picking the
+  device up, or setting off brings it back. The Tab5's own accelerometer
+  tells it was picked up, and vetoes a "move" nothing felt -- an indoor
+  fix that wandered.
 
-Not yet: zoom levels other than 14, the compass and the module's
-accelerometer, Wi-Fi location. See `ARCHITECTURE.md`.
+Not yet: zoom levels other than 14, Wi-Fi location. The compass is not
+coming: the M135's magnetometer never gave a trustworthy heading where
+it is mounted. See `ARCHITECTURE.md`.
 
 What this keeps on the card is hidden, as Defeatist's is: dotted names
 with the FAT hidden attribute set, so they are not the first thing you
@@ -199,5 +202,7 @@ NMEA parser. Only a C compiler is needed;
 
 ## Licence
 
-MIT. See `LICENSE`. Map data on your card is the map provider's, under
+MIT. See `LICENSE`. The firmware embeds Bosch Sensortec's BMI270
+configuration image, fetched at build time, under BSD-3-Clause: see
+`LICENSE-BMI270`. Map data on your card is the map provider's, under
 its own licence (for Protomaps builds, OpenStreetMap's ODbL).

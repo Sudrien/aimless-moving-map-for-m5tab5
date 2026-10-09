@@ -47,7 +47,11 @@
 # tilesrc_fetch() and maprender_points(), which feed it, on the fixture.
 #
 # motiontest: main/motion.c, the receiver's rate by speed and the parked
-# dim.
+# dim, and main/handling.c, the accelerometer's part in it (0032).
+#
+# bmi270tooltest: tools/fetch_bmi270_config.py on made-up sources -- the
+# accelerometer's configuration image, taken out and checked (0032).
+# Needs python3.
 #
 # -fno-sanitize=shift: raster.c converts to fixed point with
 # `v << RS_FRAC_BITS` on signed values that can be negative (geometry
@@ -73,7 +77,7 @@ CORE_SRCS := $(CORE)/src/inflate.c $(CORE)/src/mvt.c $(CORE)/src/pmtiles.c \
 TILE_SRCS := ../main/maptile.c ../main/maplabel.c
 TILE_DEPS := $(TILE_SRCS) ../main/maptile.h ../main/maplabel.h
 
-all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop run-maplabel run-places run-motion
+all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop run-maplabel run-places run-motion run-bmi270tool
 
 maptiletest: maptiletest.c $(TILE_DEPS) $(CORE_SRCS) fixture.pmtiles
 	$(CC) $(CFLAGS) -o $@ maptiletest.c $(TILE_SRCS) $(CORE_SRCS) $(LDFLAGS)
@@ -172,13 +176,16 @@ placestest: placestest.c ../main/places.c ../main/places.h ../main/tilesrc.c ../
 run-places: placestest
 	cd $(CURDIR) && ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./placestest
 
-motiontest: motiontest.c ../main/motion.c ../main/motion.h ../main/waypoints.c ../main/waypoints.h
-	$(CC) $(CFLAGS) -o $@ motiontest.c ../main/motion.c ../main/waypoints.c $(LDFLAGS)
+motiontest: motiontest.c ../main/motion.c ../main/motion.h ../main/handling.c ../main/handling.h ../main/waypoints.c ../main/waypoints.h
+	$(CC) $(CFLAGS) -o $@ motiontest.c ../main/motion.c ../main/handling.c ../main/waypoints.c $(LDFLAGS)
 
 run-motion: motiontest
 	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./motiontest
 
+run-bmi270tool: bmi270tooltest.py ../tools/fetch_bmi270_config.py
+	python3 -I bmi270tooltest.py
+
 clean:
 	rm -f motiontest placestest maplabeltest areatest lastfixtest maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest suntest uirowtest waypointstest worldtiletest worldtile.bin aoptest
 
-.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop run-maplabel run-places run-motion clean
+.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop run-maplabel run-places run-motion run-bmi270tool clean
