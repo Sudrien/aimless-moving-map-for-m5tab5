@@ -52,6 +52,7 @@
 #include "lcd.h"
 #include "storage.h"
 #include "storage_io.h"
+#include "rtc8130.h"
 #include "tab5io.h"
 #include "touch.h"
 #include "usbhost.h"
@@ -73,6 +74,7 @@
 #include "mapview.h"
 #include "motion.h"
 #include "places.h"
+#include "trust.h"
 #include "style.h"
 #include "sun.h"
 #include "netremote.h"
@@ -109,6 +111,10 @@ static const char *TAG = "aimless";
 #define COL_STATUS_BG   RGB(0, 0, 0)
 #define COL_STATUS_FG   RGB(255, 255, 255)
 #define COL_WAIT        RGB(240, 180, 60)
+/* The status bar's ground when the checks hold one flag, and several
+ * (0033). src: chosen, dark enough that the white line reads on them. */
+#define COL_TRUST_ODD   RGB(140, 95, 10)
+#define COL_TRUST_BAD   RGB(150, 25, 25)
 
 /* The NVS namespace saved networks are read from: defeatist's, so a
  * network joined there is joined here (0007 shares the partition). */
@@ -200,6 +206,12 @@ static bool        s_idle_dim;
  * about being handled. Main loop only. */
 static bool        s_imu;
 static handling_t  s_hand;
+/* The consistency checks (0033), and the RTC they hold GNSS time to: its
+ * time when last read or written, and the uptime then, so it is carried
+ * forward without a read every pass. 0: it cannot vouch for one. */
+static trust_t     s_trust;
+static int64_t     s_rtc_epoch;
+static int64_t     s_rtc_at_us;
 
 /*
  * Place names (0030). Two indexes, the z12 block's localities and
@@ -331,12 +343,20 @@ static void draw_status(const gnss_fix_t *fix, int pending)
      * part of the bar worth reading at a glance. */
     char nav[64] = "";
     /* Static: with the place, past CLAUDE.md's few hundred bytes of stack. */
-    static char line[384], place[4 * MAPLABEL_TEXT_MAX + 8];
+    static char line[512], place[4 * MAPLABEL_TEXT_MAX + 8], check[80];
     if (gnss_coarse(fix)) wp_target_text(&s_wp, fix->lat, fix->lon, nav, sizeof(nav));
     if (!gnss_coarse(fix) || !places_text(&s_places, place, sizeof(place))) place[0] = '\0';
+    /* 0033: what the checks hold, named, as the original's "CHECK:" --
+     * ahead of the numbers, since the line is cut at the right. */
+    {
+        char names[64];
+        trust_text(&s_trust, names, sizeof(names));
+        if (gnss_coarse(fix) && names[0]) snprintf(check, sizeof(check), "CHECK: %s   ", names);
+        else check[0] = '\0';
+    }
     if (gnss_coarse(fix)) {
-        snprintf(line, sizeof(line), "%s%s%s%s%.5f %c  %.5f %c   z%d   %d sats   HDOP %.1f   %.0f km/h   %.6sZ   %s%s",
-                 place, place[0] ? "   " : "", nav, nav[0] ? "   " : "",
+        snprintf(line, sizeof(line), "%s%s%s%s%s%.5f %c  %.5f %c   z%d   %d sats   HDOP %.1f   %.0f km/h   %.6sZ   %s%s",
+                 place, place[0] ? "   " : "", nav, nav[0] ? "   " : "", check,
                  fabs(fix->lat), fix->lat < 0 ? 'S' : 'N',
                  fabs(fix->lon), fix->lon < 0 ? 'W' : 'E',
                  VIEW_ZOOM, fix->sats, fix->hdop, fix->speed_kmh, fix->utc,
@@ -351,7 +371,13 @@ static void draw_status(const gnss_fix_t *fix, int pending)
                  fix->cons[3].visible, s_online ? "online" : "offline",
                  pending ? "   drawing" : "");
     }
-    gfx_fill_rect(0, 0, gfx_w(), STATUS_H, COL_STATUS_BG);
+    /* src: original/README.md: amber for a questionable fix, red when
+     * several checks fail together. The original's green for a normal
+     * fix is not taken: the bar here has been black from 0005. */
+    const uint16_t bg = !gnss_coarse(fix) ? COL_STATUS_BG
+                      : s_trust.level == TRUST_BAD ? COL_TRUST_BAD
+                      : s_trust.level == TRUST_ODD ? COL_TRUST_ODD : COL_STATUS_BG;
+    gfx_fill_rect(0, 0, gfx_w(), STATUS_H, bg);
     gfx_draw_text(10, (STATUS_H - GFX_GLYPH_H(TEXT_SCALE)) / 2, line, TEXT_SCALE,
                   gfx_w() - 20, gnss_coarse(fix) ? COL_STATUS_FG : COL_WAIT);
 }
@@ -2055,6 +2081,37 @@ static void motion_step(const gnss_fix_t *fix)
     }
 }
 
+/*
+ * The consistency checks (0033), every pass; trust.c runs them once per
+ * solution. The RTC's time carried forward on uptime; set from NTP when
+ * a sync lands, as the original's ntpPolicy() did, and never from GNSS,
+ * or the clock check would compare GNSS time with itself.
+ */
+static void trust_step(const gnss_fix_t *fix)
+{
+    static bool synced;
+    if (!synced && wifi_ntp_synced()) {
+        synced = true;
+        const int64_t now = (int64_t)time(NULL);
+        if (rtc8130_write(now)) {
+            s_rtc_epoch = now;
+            s_rtc_at_us = esp_timer_get_time();
+            ESP_LOGI(TAG, "rtc: set from NTP");
+        }
+    }
+    const int64_t rtc = s_rtc_epoch ? s_rtc_epoch + (esp_timer_get_time() - s_rtc_at_us) / 1000000 : 0;
+    if (trust_update(&s_trust, fix, (uint32_t)(esp_timer_get_time() / 1000), rtc, gnss_pps_interval())) {
+        s_dirty = true;
+        char names[64];
+        trust_text(&s_trust, names, sizeof(names));
+        if (s_trust.level >= TRUST_ODD)
+            ESP_LOGW(TAG, "trust: %s - %s",
+                     s_trust.level == TRUST_BAD ? "MULTIPLE CHECKS FAILED" : "one check failed", names);
+        else if (s_trust.level == TRUST_OK)
+            ESP_LOGI(TAG, "trust: every check passes");
+    }
+}
+
 /* ---- boot ---- */
 
 void app_main(void)
@@ -2081,6 +2138,20 @@ void app_main(void)
         touch_set_rotation(VIEW_ROTATION);
     else
         ESP_LOGW(TAG, "no touch this boot");
+    /* The RTC (0033), for the clock check. */
+    trust_reset(&s_trust);
+    if (rtc8130_init(tab5io_bus())) {
+        int64_t t;
+        if (rtc8130_read(&t)) {
+            s_rtc_epoch = t;
+            s_rtc_at_us = esp_timer_get_time();
+            ESP_LOGI(TAG, "rtc: %lld", (long long)t);
+        } else {
+            ESP_LOGI(TAG, "rtc: present, not set; no clock check until NTP");
+        }
+    } else {
+        ESP_LOGW(TAG, "rtc: not found; no clock check");
+    }
     /* The accelerometer (0032), for the parked dim. Its image was
      * fetched when the firmware was built; without it, none. */
     {
@@ -2253,6 +2324,7 @@ void app_main(void)
         setup_step();
         ui_touch(&fix);
         motion_step(&fix);
+        trust_step(&fix);
         lastfix_keep(&fix);
         ttff_report(&fix);
         aop_keep(&fix);

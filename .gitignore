@@ -22,3 +22,4 @@ test/aoptest
 test/maplabeltest
 test/placestest
 test/motiontest
+test/trusttest

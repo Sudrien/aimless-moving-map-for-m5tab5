@@ -85,7 +85,16 @@ What works:
   tells it was picked up, and vetoes a "move" nothing felt -- an indoor
   fix that wandered.
 
-Not yet: zoom levels other than 14, Wi-Fi location. The compass is not
+- Consistency checks on the fix: a jump faster than any vehicle, Doppler
+  speed that disagrees with the movement, GNSS time minutes from the
+  Tab5's clock (set from NTP, never from GNSS), satellite signals all
+  the same strength, a pulse-per-second that is not, an impossible or
+  frozen altitude. One is ordinary -- a tunnel exit is a jump -- and the
+  status bar turns amber and names it; several at once turn it red.
+  Nothing is refused: the map draws either way.
+
+Not yet: zoom levels other than 14, Wi-Fi location (and with it the
+checks' Wi-Fi cross-check). The compass is not
 coming: the M135's magnetometer never gave a trustworthy heading where
 it is mounted. See `ARCHITECTURE.md`.
 

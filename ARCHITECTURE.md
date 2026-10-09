@@ -38,6 +38,8 @@ does.
   parked dim. The original's gnssRatePolicy() and idleDimmed().
 - **handling** (`main/handling.c`), **imu** (`main/imu.c`): the Tab5's
   own BMI270, accelerometer only, saying when the device is handled.
+- **trust** (`main/trust.c`): consistency checks on the GNSS solution.
+  The original's gpstrust.cpp.
 - **tilesrc** (`main/tilesrc.c`): which source a tile comes from -- the
   cache, the card, the network. The original's netsource_get().
 - **tilecache** (`main/tilecache.c`): tiles fetched over the network,
@@ -1011,3 +1013,43 @@ and -O2 for the P4; not built, and not run on the board. On the board:
 "imu: BMI270 at 0x68: configured", then every 10 s "imu: peak N counts"
 -- a few hundred on a desk, thousands when picked up -- and "bright:
 idle dim off (handled)" on picking it up while dimmed.
+
+### 0033 -- consistency checks
+
+original/gpstrust.cpp: a receiver believes whatever reaches its antenna,
+so the checks look for what a transmitter or a replay would have to get
+wrong, and say so on the status bar. Nothing is refused; one flag is a
+bridge, several at once the interesting case.
+
+**trust.c** is the original's checks with no clock or receiver in them,
+host-tested, with its thresholds, all judgements there: a jump over
+400 km/h; Doppler speed 50 % from the movement above 15 km/h; GNSS time
+180 s from the RTC; with 8 satellites in two or more constellations,
+under 4 dB from strongest to weakest; PPS outside 900-1100 ms with a 3D
+fix; altitude under -450 m or over 12 km, or unchanged for 30 solutions
+while moving 20 m each. A flag holds 8 s. The Wi-Fi cross-check's bit is
+kept and never set: there is no Wi-Fi positioning yet.
+
+One fix to the original. It ran on every pass of its main loop, about
+200 Hz, with the same fix each time; the jump and speed checks skip
+anything under 250 ms apart, so they ran only after a stall -- and then
+compared one solution's movement with the stall's length -- and the
+frozen-altitude check, which wants 20 m between calls, never ran. Here
+the checks between solutions run once per solution, when its UTC field
+changes, timed by when each arrived. trusttest runs both cases.
+
+GNSS time is turned into an epoch in UTC, where the original used
+mktime() on both sides.
+
+**aimless.c**: the Tab5's RX8130 RTC (feckless-drivers' rtc8130) is read
+at boot and carried forward on uptime, and written when NTP first syncs
+-- the original's ntpPolicy() -- and never from GNSS, so the clock check
+is not GNSS compared with itself. The status bar goes amber with one
+flag and red with several, and names them after the place, "CHECK: jump,
+speed", ahead of the numbers that are cut at the right. The original's
+green for a normal fix is not taken: the bar has been black since 0005.
+
+Host: trusttest (39 checks). Device: trust.c and aimless.c compiled with
+-c at -Og, -Os and -O2 for the P4; not built, and not run on the board.
+On the board: "rtc: ..." at boot, "trust: every check passes" at the
+first fix, and a "trust:" warning naming any check that fires.

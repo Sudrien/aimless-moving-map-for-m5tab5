@@ -57,7 +57,7 @@ elseif(NOT EXISTS "${AIMLESS_BMI270}.tried")
 endif()
 
 idf_component_register(
-    SRCS "aimless.c" "gnss.c" "ffread.c" "maptile.c" "maplabel.c" "places.c" "motion.c" "handling.c" "imu.c" "mapset.c" "mapview.c" "tilecache.c" "tilesrc.c" "netremote.c"
+    SRCS "aimless.c" "gnss.c" "ffread.c" "maptile.c" "maplabel.c" "places.c" "motion.c" "handling.c" "imu.c" "trust.c" "mapset.c" "mapview.c" "tilecache.c" "tilesrc.c" "netremote.c"
          "portal.c" "portalweb.c" "dnsreply.c" "wifijoin.c" "launcher_import.c" "launcherkey.c"
          "sun.c" "uirow.c" "waypoints.c" "worldtile.c" "lastfix.c" "area.c" "ubx.c" "aop.c"
     INCLUDE_DIRS "."
