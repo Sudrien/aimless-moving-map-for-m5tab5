@@ -100,7 +100,7 @@ static void between(trust_t *t, const gnss_fix_t *fix, uint32_t now_ms)
 }
 
 bool trust_update(trust_t *t, const gnss_fix_t *fix, uint32_t now_ms,
-                  int64_t rtc_epoch, uint32_t pps_ms)
+                  int64_t rtc_epoch, uint32_t pps_ms, const trust_wifi_t *wifi)
 {
     const trust_level_t was = t->level;
     expire(t, now_ms);
@@ -148,6 +148,11 @@ bool trust_update(trust_t *t, const gnss_fix_t *fix, uint32_t now_ms,
          * nothing; 0 is no pulse seen, perhaps not wired. */
         if (fix->mode >= 3 && pps_ms && (pps_ms < TRUST_PPS_LO_MS || pps_ms > TRUST_PPS_HI_MS))
             flag(t, TRUST_F_PPS, now_ms);
+
+        /* Wi-Fi: only a fresh estimate from enough access points. */
+        if (wifi && wifi->used >= TRUST_WIFI_MIN_APS && wifi->age_ms < TRUST_WIFI_MAX_AGE_MS &&
+            dist_m(fix->lat, fix->lon, wifi->lat, wifi->lon) > TRUST_WIFI_MAX_M + wifi->acc_m)
+            flag(t, TRUST_F_WIFI, now_ms);
 
         snprintf(t->prev_utc, sizeof(t->prev_utc), "%s", fix->utc);
         t->prev_lat = fix->lat;

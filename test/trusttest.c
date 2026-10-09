@@ -53,7 +53,7 @@ static void drive(trust_t *t, int *s, double *lat, double kmh, int n, int feeds,
         (*s)++;
         *ms += 1000;
         const gnss_fix_t f = fix_at(*s, *lat, kmh);
-        for (int k = 0; k < feeds; k++) trust_update(t, &f, *ms + (uint32_t)k * 5, T0 + *s, 1000);
+        for (int k = 0; k < feeds; k++) trust_update(t, &f, *ms + (uint32_t)k * 5, T0 + *s, 1000, NULL);
     }
 }
 
@@ -78,14 +78,14 @@ static void healthy(void)
     CHECK(t.level == TRUST_UNKNOWN, "level before a fix");
     gnss_fix_t none;
     gnss_fix_init(&none);
-    trust_update(&t, &none, 1000, 0, 0);
+    trust_update(&t, &none, 1000, 0, 0, NULL);
     CHECK(t.level == TRUST_UNKNOWN, "no fix is not OK");
 
     int s = 0;
     double lat = 42.3;
     uint32_t ms = 1000;
     const gnss_fix_t f = fix_at(s, lat, 0);
-    CHECK(trust_update(&t, &f, ms, T0, 1000) && t.level == TRUST_OK, "first fix not OK");
+    CHECK(trust_update(&t, &f, ms, T0, 1000, NULL) && t.level == TRUST_OK, "first fix not OK");
     drive(&t, &s, &lat, 100.0, 60, 200, &ms);
     drive(&t, &s, &lat, 3.0, 30, 200, &ms);        /* walking: Doppler noisy */
     drive(&t, &s, &lat, 0.0, 30, 200, &ms);        /* parked */
@@ -108,8 +108,8 @@ static void original_bug(void)
     uint32_t ms = 1000;
     drive(&t, &s, &lat, 100.0, 5, 1, &ms);
     const gnss_fix_t f = fix_at(s, lat, 100.0);
-    trust_update(&t, &f, ms + 300, T0 + s, 1000);   /* the same fix, after a stall */
-    trust_update(&t, &f, ms + 700, T0 + s, 1000);
+    trust_update(&t, &f, ms + 300, T0 + s, 1000, NULL);   /* the same fix, after a stall */
+    trust_update(&t, &f, ms + 700, T0 + s, 1000, NULL);
     CHECK(t.flags == 0, "the same solution compared with itself: 0x%x", t.flags);
 
     /* And the solution rate slowing to 5 s (0031) is not a jump. */
@@ -118,7 +118,7 @@ static void original_bug(void)
         s += 5;
         ms += 5000;
         const gnss_fix_t g = fix_at(s, lat, 100.0);
-        trust_update(&t, &g, ms, T0 + s, 1000);
+        trust_update(&t, &g, ms, T0 + s, 1000, NULL);
     }
     CHECK(t.flags == 0, "5 s solutions flagged 0x%x", t.flags);
 }
@@ -137,7 +137,7 @@ static void each(void)
     drive(&t, &s, &lat, 50.0, 3, 1, &ms);
     f = fix_at(++s, lat + 2000 * M_LAT, 50.0);
     ms += 1000;
-    trust_update(&t, &f, ms, T0 + s, 1000);
+    trust_update(&t, &f, ms, T0 + s, 1000, NULL);
     CHECK(t.flags & TRUST_F_JUMP, "2 km in 1 s not a jump");
     CHECK(t.flags & TRUST_F_SPEED, "2 km in 1 s at a Doppler 50 km/h, speed agrees");
     CHECK(t.level == TRUST_BAD, "two flags not bad: %d", t.level);
@@ -157,7 +157,7 @@ static void each(void)
         lat += 20.0 / 3.6 * M_LAT;
         f = fix_at(++s, lat, 80.0);
         ms += 1000;
-        trust_update(&t, &f, ms, T0 + s, 1000);
+        trust_update(&t, &f, ms, T0 + s, 1000, NULL);
     }
     CHECK(t.flags == TRUST_F_SPEED && t.level == TRUST_ODD, "speed: 0x%x level %d", t.flags, t.level);
     /* But at a walk the two disagree honestly. */
@@ -166,7 +166,7 @@ static void each(void)
         lat += 2.0 / 3.6 * M_LAT;
         f = fix_at(++s, lat, 9.0);
         ms += 1000;
-        trust_update(&t, &f, ms, T0 + s, 1000);
+        trust_update(&t, &f, ms, T0 + s, 1000, NULL);
     }
     CHECK(t.flags == 0, "walking speed flagged 0x%x", t.flags);
 
@@ -176,64 +176,64 @@ static void each(void)
     gnss_fix_t none;
     gnss_fix_init(&none);
     ms += 1000;
-    trust_update(&t, &none, ms, 0, 0);
+    trust_update(&t, &none, ms, 0, 0, NULL);
     f = fix_at(++s, lat + 5000 * M_LAT, 50.0);
     ms += 1000;
-    trust_update(&t, &f, ms, T0 + s, 1000);
+    trust_update(&t, &f, ms, T0 + s, 1000, NULL);
     CHECK(t.flags == 0, "a jump across a gap flagged 0x%x", t.flags);
 
     /* Clock: 200 s behind the RTC. Not with an RTC that cannot vouch. */
     trust_reset(&t);
     f = fix_at(0, 42.3, 0);
-    trust_update(&t, &f, 1000, T0 + 200, 1000);
+    trust_update(&t, &f, 1000, T0 + 200, 1000, NULL);
     CHECK(t.flags == TRUST_F_CLOCK, "200 s behind: 0x%x", t.flags);
     trust_reset(&t);
-    trust_update(&t, &f, 1000, T0 + 100, 1000);
+    trust_update(&t, &f, 1000, T0 + 100, 1000, NULL);
     CHECK(t.flags == 0, "100 s flagged");
     trust_reset(&t);
-    trust_update(&t, &f, 1000, 0, 1000);
-    trust_update(&t, &f, 1000, 946684800LL, 1000);
+    trust_update(&t, &f, 1000, 0, 1000, NULL);
+    trust_update(&t, &f, 1000, 946684800LL, 1000, NULL);
     CHECK(t.flags == 0, "an unset RTC flagged");
 
     /* SNR: every channel within 3 dB. */
     trust_reset(&t);
     f = fix_at(0, 42.3, 0);
     for (int i = 0; i < 3; i++) { f.cons[i].best_snr = 40; f.cons[i].worst_snr = 38; }
-    trust_update(&t, &f, 1000, T0, 1000);
+    trust_update(&t, &f, 1000, T0, 1000, NULL);
     CHECK(t.flags == TRUST_F_SNR, "bunched: 0x%x", t.flags);
     /* One constellation bunched like that, or too few satellites: no. */
     trust_reset(&t);
     f = fix_at(0, 42.3, 0);
     f.cons[1].visible = f.cons[2].visible = 0;
     f.cons[0].best_snr = 40; f.cons[0].worst_snr = 38; f.cons[0].visible = 9;
-    trust_update(&t, &f, 1000, T0, 1000);
+    trust_update(&t, &f, 1000, T0, 1000, NULL);
     CHECK(t.flags == 0, "one constellation flagged");
     trust_reset(&t);
     f = fix_at(0, 42.3, 0);
     f.cons[0].visible = 3; f.cons[1].visible = 2; f.cons[2].visible = 2;
     for (int i = 0; i < 3; i++) { f.cons[i].best_snr = 40; f.cons[i].worst_snr = 38; }
-    trust_update(&t, &f, 1000, T0, 1000);
+    trust_update(&t, &f, 1000, T0, 1000, NULL);
     CHECK(t.flags == 0, "7 satellites flagged");
 
     /* PPS: 1.5 s with 3D, not with 2D, not with none seen. */
     trust_reset(&t);
     f = fix_at(0, 42.3, 0);
-    trust_update(&t, &f, 1000, T0, 1500);
+    trust_update(&t, &f, 1000, T0, 1500, NULL);
     CHECK(t.flags == TRUST_F_PPS, "PPS 1500: 0x%x", t.flags);
     trust_reset(&t);
     f.mode = 2;
-    trust_update(&t, &f, 1000, T0, 1500);
+    trust_update(&t, &f, 1000, T0, 1500, NULL);
     CHECK(t.flags == 0, "PPS with 2D flagged");
     trust_reset(&t);
     f.mode = 3;
-    trust_update(&t, &f, 1000, T0, 0);
+    trust_update(&t, &f, 1000, T0, 0, NULL);
     CHECK(t.flags == 0, "no PPS flagged");
 
     /* Altitude: impossible, and frozen while driving. */
     trust_reset(&t);
     f = fix_at(0, 42.3, 0);
     f.altitude = 15000.0;
-    trust_update(&t, &f, 1000, T0, 1000);
+    trust_update(&t, &f, 1000, T0, 1000, NULL);
     CHECK(t.flags == TRUST_F_ALT, "15 km: 0x%x", t.flags);
     trust_reset(&t); s = 0; lat = 42.3; ms = 1000;
     for (int i = 0; i < 40; i++) {
@@ -241,7 +241,7 @@ static void each(void)
         f = fix_at(++s, lat, 90.0);
         f.altitude = 200.0;
         ms += 1000;
-        trust_update(&t, &f, ms, T0 + s, 1000);
+        trust_update(&t, &f, ms, T0 + s, 1000, NULL);
         if (i == 29) CHECK(!(t.flags & TRUST_F_ALT), "frozen flagged after %d", i + 1);
     }
     CHECK(t.flags == TRUST_F_ALT, "frozen 40 s at 90 km/h: 0x%x", t.flags);
@@ -251,9 +251,33 @@ static void each(void)
         f = fix_at(++s, 42.3, 0);
         f.altitude = 200.0;
         ms += 1000;
-        trust_update(&t, &f, ms, T0 + s, 1000);
+        trust_update(&t, &f, ms, T0 + s, 1000, NULL);
     }
     CHECK(t.flags == 0, "parked at one height flagged 0x%x", t.flags);
+
+    /* Wi-Fi: 5 km off with 6 APs fresh flags; 2 km does not, nor 5 km
+     * from 4 APs, nor a stale estimate. */
+    trust_wifi_t w = { 42.3 + 0.045, -83.4, 100.0f, 6, 10000 };
+    trust_reset(&t);
+    f = fix_at(0, 42.3, 0);
+    trust_update(&t, &f, 1000, T0, 1000, &w);
+    CHECK(t.flags == TRUST_F_WIFI, "wifi 5 km: 0x%x", t.flags);
+    trust_text(&t, txt, sizeof(txt));
+    CHECK(strcmp(txt, "wifi disagrees") == 0, "text %s", txt);
+    w.lat = 42.3 + 0.018;
+    trust_reset(&t);
+    trust_update(&t, &f, 1000, T0, 1000, &w);
+    CHECK(t.flags == 0, "wifi 2 km flagged");
+    w.lat = 42.3 + 0.045;
+    w.used = 4;
+    trust_reset(&t);
+    trust_update(&t, &f, 1000, T0, 1000, &w);
+    CHECK(t.flags == 0, "wifi from 4 APs flagged");
+    w.used = 6;
+    w.age_ms = 130000;
+    trust_reset(&t);
+    trust_update(&t, &f, 1000, T0, 1000, &w);
+    CHECK(t.flags == 0, "a stale wifi estimate flagged");
 
     /* A cut text is still terminated. */
     trust_reset(&t);

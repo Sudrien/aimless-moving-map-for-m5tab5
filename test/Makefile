@@ -56,6 +56,9 @@
 # trusttest: main/trust.c, the consistency checks on the GNSS solution
 # (0033).
 #
+# wifiloctest: main/wifiloc.c, Wi-Fi positioning's survey, estimate, file
+# rows and timing (0035).
+#
 # -fno-sanitize=shift: raster.c converts to fixed point with
 # `v << RS_FRAC_BITS` on signed values that can be negative (geometry
 # outside the tile). That is undefined in C11 and does the arithmetic
@@ -80,7 +83,7 @@ CORE_SRCS := $(CORE)/src/inflate.c $(CORE)/src/mvt.c $(CORE)/src/pmtiles.c \
 TILE_SRCS := ../main/maptile.c ../main/maplabel.c
 TILE_DEPS := $(TILE_SRCS) ../main/maptile.h ../main/maplabel.h
 
-all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop run-maplabel run-places run-motion run-bmi270tool run-trust
+all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop run-maplabel run-places run-motion run-bmi270tool run-trust run-wifiloc
 
 maptiletest: maptiletest.c $(TILE_DEPS) $(CORE_SRCS) fixture.pmtiles
 	$(CC) $(CFLAGS) -o $@ maptiletest.c $(TILE_SRCS) $(CORE_SRCS) $(LDFLAGS)
@@ -194,7 +197,13 @@ trusttest: trusttest.c ../main/trust.c ../main/trust.h ../main/nmea.h
 run-trust: trusttest
 	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./trusttest
 
-clean:
-	rm -f trusttest motiontest placestest maplabeltest areatest lastfixtest maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest suntest uirowtest waypointstest worldtiletest worldtile.bin aoptest
+wifiloctest: wifiloctest.c ../main/wifiloc.c ../main/wifiloc.h
+	$(CC) $(CFLAGS) -o $@ wifiloctest.c ../main/wifiloc.c $(LDFLAGS)
 
-.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop run-maplabel run-places run-motion run-bmi270tool run-trust clean
+run-wifiloc: wifiloctest
+	ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./wifiloctest
+
+clean:
+	rm -f wifiloctest trusttest motiontest placestest maplabeltest areatest lastfixtest maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest suntest uirowtest waypointstest worldtiletest worldtile.bin aoptest
+
+.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop run-maplabel run-places run-motion run-bmi270tool run-trust run-wifiloc clean

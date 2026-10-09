@@ -75,6 +75,7 @@
 #include "motion.h"
 #include "places.h"
 #include "trust.h"
+#include "wifiloc.h"
 #include "style.h"
 #include "sun.h"
 #include "netremote.h"
@@ -210,6 +211,25 @@ static handling_t  s_hand;
  * time when last read or written, and the uptime then, so it is carried
  * forward without a read every pass. 0: it cannot vouch for one. */
 static trust_t     s_trust;
+/*
+ * Wi-Fi location (0035). The table is the wifiloc task's alone; the
+ * estimate, which the main loop reads, is behind s_wl_lock. Off at boot,
+ * as the original's: scanning and recording access points is something
+ * to opt into, not a default whenever the board is on.
+ */
+static wifiloc_db_t      s_wl;
+static volatile bool     s_wl_ready;    /* the table exists */
+static volatile bool     s_wl_on;
+static volatile bool     s_wl_flush;    /* turned off: write it now */
+static volatile uint32_t s_wl_count;
+static SemaphoreHandle_t s_wl_lock;
+static wifiloc_est_t     s_wl_est;
+static uint32_t          s_wl_est_ms;
+static bool              s_wl_est_ok;
+/* What the map is shown when the receiver has nothing (0035). */
+static bool              s_estimated;
+static float             s_est_acc;
+static int               s_est_used;
 static int64_t     s_rtc_epoch;
 static int64_t     s_rtc_at_us;
 
@@ -354,7 +374,18 @@ static void draw_status(const gnss_fix_t *fix, int pending)
         if (gnss_coarse(fix) && names[0]) snprintf(check, sizeof(check), "CHECK: %s   ", names);
         else check[0] = '\0';
     }
-    if (gnss_coarse(fix)) {
+    if (s_estimated) {
+        /* 0035: named for what it is, as the original's: a coordinate with
+         * no qualifier reads as a fix, and this can be a hundred metres
+         * out and will not improve by waiting. */
+        snprintf(line, sizeof(line), "%s%sWIFI ESTIMATE ~%.0f m from %d access points   "
+                                     "%.5f %c  %.5f %c   no GNSS, %d sats in view   %s",
+                 place, place[0] ? "   " : "", s_est_acc, s_est_used,
+                 fabs(fix->lat), fix->lat < 0 ? 'S' : 'N',
+                 fabs(fix->lon), fix->lon < 0 ? 'W' : 'E',
+                 fix->cons[0].visible + fix->cons[1].visible + fix->cons[2].visible +
+                 fix->cons[3].visible, s_online ? "online" : "offline");
+    } else if (gnss_coarse(fix)) {
         snprintf(line, sizeof(line), "%s%s%s%s%s%.5f %c  %.5f %c   z%d   %d sats   HDOP %.1f   %.0f km/h   %.6sZ   %s%s",
                  place, place[0] ? "   " : "", nav, nav[0] ? "   " : "", check,
                  fabs(fix->lat), fix->lat < 0 ? 'S' : 'N',
@@ -374,7 +405,9 @@ static void draw_status(const gnss_fix_t *fix, int pending)
     /* src: original/README.md: amber for a questionable fix, red when
      * several checks fail together. The original's green for a normal
      * fix is not taken: the bar here has been black from 0005. */
+    /* src: original/README.md: amber for a Wi-Fi estimate too. */
     const uint16_t bg = !gnss_coarse(fix) ? COL_STATUS_BG
+                      : s_estimated ? COL_TRUST_ODD
                       : s_trust.level == TRUST_BAD ? COL_TRUST_BAD
                       : s_trust.level == TRUST_ODD ? COL_TRUST_ODD : COL_STATUS_BG;
     gfx_fill_rect(0, 0, gfx_w(), STATUS_H, bg);
@@ -1012,6 +1045,17 @@ static void row_text(int i, char *name, char *value, char *note, uint16_t *chip)
         snprintf(value, 40, "%s", s_labels ? "on" : "off");
         snprintf(note, 80, "names drawn over the map - instant either way");
         *chip = s_labels ? COL_CHIP_SET : COL_BTN;
+        break;
+    case UI_SET_WIFILOC:
+        /* src: original/tab5_map.cpp setRowText()'s SET_WIFILOC. */
+        snprintf(name, 40, "wifi positioning");
+        if (!s_wl_ready) snprintf(value, 40, "no memory");
+        else snprintf(value, 40, "%s", s_wl_on ? "on" : "off");
+        if (s_estimated)
+            snprintf(note, 80, "position from %d access points right now", s_est_used);
+        else
+            snprintf(note, 80, "%u access points learned so far", (unsigned)s_wl_count);
+        *chip = s_estimated ? COL_TRUST_ODD : s_wl_on ? COL_CHIP_SET : COL_BTN;
         break;
     case UI_SET_WIFI: {
         char ssid[33];
@@ -1882,6 +1926,19 @@ static void row_tap(int row)
         s_labels = !s_labels;
         ESP_LOGI(TAG, "labels: %s", s_labels ? "on" : "off");
         break;
+    case UI_SET_WIFILOC:
+        if (!s_wl_ready) break;
+        s_wl_on = !s_wl_on;
+        if (!s_wl_on) {
+            /* Off writes what was learned, and drops the estimate: the
+             * original's wifiloc_set_enabled(). */
+            s_wl_flush = true;
+            xSemaphoreTake(s_wl_lock, portMAX_DELAY);
+            s_wl_est_ok = false;
+            xSemaphoreGive(s_wl_lock);
+        }
+        ESP_LOGI(TAG, "wifiloc: %s", s_wl_on ? "on" : "off");
+        break;
     case UI_SET_WIFI:
         /* The portal, as at boot; the panel closes so the box shows. */
         s_panel = false;
@@ -2081,6 +2138,194 @@ static void motion_step(const gnss_fix_t *fix)
     }
 }
 
+/* ---- Wi-Fi location (0035) ---- */
+
+/* src: original/wifiloc.cpp WIFILOC_PATH, /wifiloc.csv; dotted and hidden
+ * as everything else this keeps (0023), the original's adopted. */
+#define WIFILOC_PATH    STORAGE_SD_MOUNT "/.aimless.wifiloc.csv"
+#define WIFILOC_TMP     STORAGE_SD_MOUNT "/.aimless.wifiloc.tmp"
+#define WIFILOC_OLD     STORAGE_SD_MOUNT "/wifiloc.csv"
+/* src: chosen. The scan's buffers are static; this is the log and the
+ * stdio calls. Its high-water mark is logged after the load. */
+#define WIFILOC_STACK   (6144)
+#define WIFILOC_PRIO    (2)
+/* src: chosen, once a second: the original polled every loop, but its
+ * gates are seconds wide. */
+#define WIFILOC_POLL_MS (1000)
+/* src: feckless-network-handler wifi.c SCAN_MAX_AP. */
+#define WIFILOC_SEEN    (64)
+
+static uint32_t ms_now(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+
+/* The file, a line at a time. A line longer than the buffer is skipped
+ * whole, so one damaged row costs one record. */
+static void wifiloc_load(void)
+{
+    static char line[192];
+    file_adopt(WIFILOC_OLD, WIFILOC_PATH);
+    FILE *f = fopen(WIFILOC_PATH, "r");
+    if (!f) { ESP_LOGI(TAG, "wifiloc: no database yet, starting empty"); return; }
+    if (!fgets(line, sizeof(line), f) || !wifiloc_header_ok(line)) {
+        fclose(f);
+        ESP_LOGW(TAG, "wifiloc: the header line is not ours; the file is ignored");
+        return;
+    }
+    unsigned bad = 0;
+    while (fgets(line, sizeof(line), f)) {
+        const size_t n = strlen(line);
+        if (n && line[n - 1] != '\n' && !feof(f)) {
+            int c;
+            while ((c = fgetc(f)) != EOF && c != '\n') {}
+            bad++;
+            continue;
+        }
+        if (line[0] == '\n' || line[0] == '\r' || !line[0]) continue;
+        if (!wifiloc_parse(&s_wl, line)) bad++;
+        if (s_wl.count >= s_wl.cap) break;
+    }
+    fclose(f);
+    s_wl.dirty = 0;
+    s_wl_count = s_wl.count;
+    ESP_LOGI(TAG, "wifiloc: %u access points loaded%s", (unsigned)s_wl.count,
+             bad ? ", some rows unreadable and skipped" : "");
+}
+
+/* Written whole to a second file and renamed over the first, as the
+ * saved points are, so a cut mid-write leaves the old table. */
+static void wifiloc_write(void)
+{
+    static char row[192];
+    if (!s_wl.dirty) return;
+    if (!storage_present(STORAGE_SD)) { s_wl.dirty = 0; return; }
+    FILE *f = fopen(WIFILOC_TMP, "w");
+    if (!f) { ESP_LOGW(TAG, "wifiloc: cannot write the card"); return; }
+    bool ok = fprintf(f, "%s\n", WIFILOC_HEADER) > 0;
+    for (uint32_t i = 0; ok && i < s_wl.count; i++) {
+        if (wifiloc_format(&s_wl, i, row, sizeof(row)) < 0) continue;
+        ok = fprintf(f, "%s\n", row) > 0;
+    }
+    if (fclose(f) != 0 || !ok) { remove(WIFILOC_TMP); ESP_LOGW(TAG, "wifiloc: write failed"); return; }
+    remove(WIFILOC_PATH);
+    if (rename(WIFILOC_TMP, WIFILOC_PATH) != 0) { ESP_LOGW(TAG, "wifiloc: rename failed"); return; }
+    storage_mark_hidden(WIFILOC_PATH);
+    ESP_LOGI(TAG, "wifiloc: %u access points written", (unsigned)s_wl.count);
+    s_wl.dirty = 0;
+}
+
+/*
+ * original/wifiloc.cpp wifiloc_poll() on a task of its own: a scan blocks
+ * about four seconds, and waits out a join in progress, which the main
+ * loop cannot. Learns with a fine fix, locates without one, writes when
+ * due. The radio is whatever the network side has made it: with no
+ * saved network it is not up, and nothing is scanned -- the original's
+ * duty cycling of the station belonged to its Arduino Wi-Fi and is not
+ * ported.
+ */
+static void wifiloc_task(void *arg)
+{
+    (void)arg;
+    static wifi_seen_t seen[WIFILOC_SEEN];
+    static wifiloc_ap_t aps[WIFILOC_SEEN];
+    static wifiloc_plan_t plan;
+    wifiloc_load();
+    ESP_LOGI(TAG, "wifiloc task stack: %u bytes never used",
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
+    uint32_t last_write = 0;
+    bool written = false, radio_said = false;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(WIFILOC_POLL_MS));
+        if (s_wl_flush || wifiloc_write_due(&s_wl, ms_now(), last_write, written)) {
+            s_wl_flush = false;
+            wifiloc_write();
+            last_write = ms_now();
+            written = true;
+        }
+        if (!s_wl_on) continue;
+        /* The area cache walks the link for minutes; a scan would cut in. */
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        const bool busy = s_area.active;
+        xSemaphoreGive(s_lock);
+        if (busy) continue;
+
+        gnss_fix_t fix;
+        gnss_get(&fix);
+        const uint32_t t0 = ms_now();
+        const wifiloc_why_t why = wifiloc_next(&plan, t0, gnss_fine(&fix), gnss_coarse(&fix),
+                                               fix.speed_kmh, fix.lat, fix.lon, s_wl.count > 0);
+        if (why == WIFILOC_IDLE) continue;
+
+        const int n = wifi_scan_list_quiet(seen, WIFILOC_SEEN);
+        if (n < 0) {
+            if (!radio_said) ESP_LOGI(TAG, "wifiloc: no radio to scan with");
+            radio_said = true;
+            continue;
+        }
+        radio_said = false;
+        for (int i = 0; i < n; i++) {
+            memcpy(aps[i].bssid, seen[i].bssid, sizeof(aps[i].bssid));
+            aps[i].rssi = seen[i].rssi;
+        }
+        if (why == WIFILOC_LEARN) {
+            gnss_fix_t now;
+            gnss_get(&now);
+            if (!wifiloc_keep(fix.lat, fix.lon, t0, ms_now(), gnss_fine(&now), now.lat, now.lon)) {
+                ESP_LOGI(TAG, "wifiloc: fix moved or was lost during the scan; discarded");
+                continue;
+            }
+            int added, folded, mobile;
+            wifiloc_learn(&s_wl, aps, n, now.lat, now.lon, &added, &folded, &mobile);
+            s_wl_count = s_wl.count;
+            if (added || folded)
+                ESP_LOGI(TAG, "wifiloc: learned %d new, %d updated, %d newly mobile (%u total)",
+                         added, folded, mobile, (unsigned)s_wl.count);
+        } else {
+            wifiloc_est_t e;
+            if (wifiloc_locate(&s_wl, aps, n, &e)) {
+                xSemaphoreTake(s_wl_lock, portMAX_DELAY);
+                s_wl_est = e;
+                s_wl_est_ms = ms_now();
+                s_wl_est_ok = true;
+                xSemaphoreGive(s_wl_lock);
+                s_dirty = true;
+                ESP_LOGI(TAG, "wifiloc: estimate %.5f %.5f from %d access points, spread %.0f m",
+                         e.lat, e.lon, e.used, e.acc_m);
+            } else {
+                ESP_LOGI(TAG, "wifiloc: %d known access point%s in range, need %d; no estimate",
+                         e.used, e.used == 1 ? "" : "s", WIFILOC_MIN_APS);
+            }
+        }
+    }
+}
+
+/*
+ * With no fix, a fresh estimate stands in for one, dressed as the
+ * original's: coarse, so the map centres on it; 2D, so it is never fine
+ * -- the marker is grey, no point is saved to it, the last position is
+ * not kept from it. Its spread as an HDOP over 3, about 100 m reading 5.
+ * No speed or course: nobody measured them. src: original/tab5_map.cpp's
+ * `view`.
+ */
+static void wifiloc_view(const gnss_fix_t *fix, gnss_fix_t *view)
+{
+    s_estimated = false;
+    if (gnss_coarse(fix) || !s_wl_on || !s_wl_lock) return;
+    xSemaphoreTake(s_wl_lock, portMAX_DELAY);
+    const bool ok = s_wl_est_ok && ms_now() - s_wl_est_ms <= WIFILOC_STALE_MS;
+    const wifiloc_est_t e = s_wl_est;
+    xSemaphoreGive(s_wl_lock);
+    if (!ok) return;
+    view->lat = e.lat;
+    view->lon = e.lon;
+    view->status = 'A';
+    view->mode = 2;
+    view->hdop = e.acc_m / 20.0 < 3.0 ? 3.0 : e.acc_m / 20.0;
+    view->speed_kmh = 0;
+    view->course = 0;
+    s_estimated = true;
+    s_est_acc = e.acc_m;
+    s_est_used = e.used;
+}
+
 /*
  * The consistency checks (0033), every pass; trust.c runs them once per
  * solution. The RTC's time carried forward on uptime; set from NTP when
@@ -2100,7 +2345,22 @@ static void trust_step(const gnss_fix_t *fix)
         }
     }
     const int64_t rtc = s_rtc_epoch ? s_rtc_epoch + (esp_timer_get_time() - s_rtc_at_us) / 1000000 : 0;
-    if (trust_update(&s_trust, fix, (uint32_t)(esp_timer_get_time() / 1000), rtc, gnss_pps_interval())) {
+    /* 0035: the one check whose reference a transmitter does not control. */
+    trust_wifi_t w;
+    const trust_wifi_t *wifi = NULL;
+    if (s_wl_lock && s_wl_on) {
+        xSemaphoreTake(s_wl_lock, portMAX_DELAY);
+        if (s_wl_est_ok) {
+            w.lat = s_wl_est.lat;
+            w.lon = s_wl_est.lon;
+            w.acc_m = s_wl_est.acc_m;
+            w.used = s_wl_est.used;
+            w.age_ms = (uint32_t)(esp_timer_get_time() / 1000) - s_wl_est_ms;
+            wifi = &w;
+        }
+        xSemaphoreGive(s_wl_lock);
+    }
+    if (trust_update(&s_trust, fix, (uint32_t)(esp_timer_get_time() / 1000), rtc, gnss_pps_interval(), wifi)) {
         s_dirty = true;
         char names[64];
         trust_text(&s_trust, names, sizeof(names));
@@ -2294,13 +2554,33 @@ void app_main(void)
         draw_message("Out of memory", "render task");
         return;
     }
+    /* Wi-Fi location (0035): 768 KB of PSRAM, and a task of its own. */
+    {
+        wifiloc_rec_t *tab = mem_big((size_t)WIFILOC_MAX * sizeof(wifiloc_rec_t));
+        s_wl_lock = xSemaphoreCreateMutex();
+        if (tab && s_wl_lock) {
+            wifiloc_init(&s_wl, tab, WIFILOC_MAX);
+            s_wl_ready = true;
+            if (xTaskCreate(wifiloc_task, "wifiloc", WIFILOC_STACK, NULL, WIFILOC_PRIO, NULL) != pdPASS) {
+                s_wl_ready = false;
+                ESP_LOGW(TAG, "wifiloc: no task");
+            }
+        } else {
+            ESP_LOGW(TAG, "wifiloc: no PSRAM for the table");
+        }
+    }
 
     gnss_fix_t fix;
     int64_t last_draw = 0, last_log = 0;
     for (;;) {
         gnss_get(&fix);
-        if (gnss_coarse(&fix)) {
-            const merc_pt_t p = merc_from_ll(fix.lat, fix.lon, VIEW_ZOOM);
+        /* 0035: what the map is shown, which is not always what the
+         * receiver said -- `fix` stays the receiver's, for everything
+         * that wants a real one. */
+        gnss_fix_t view = fix;
+        wifiloc_view(&fix, &view);
+        if (gnss_coarse(&view)) {
+            const merc_pt_t p = merc_from_ll(view.lat, view.lon, VIEW_ZOOM);
             s_mark_x = p.x;
             s_mark_y = p.y;
             s_mark_ok = true;
@@ -2331,9 +2611,9 @@ void app_main(void)
 
         const int64_t now = esp_timer_get_time();
         if (s_dirty || now - last_draw >= 1000000) {
-            daylight(&fix);
+            daylight(&view);
             s_dirty = false;
-            draw(&fix);
+            draw(&view);
             last_draw = now;
         }
         if (now - last_log >= 10000000) {

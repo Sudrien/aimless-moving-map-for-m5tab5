@@ -40,6 +40,9 @@ does.
   own BMI270, accelerometer only, saying when the device is handled.
 - **trust** (`main/trust.c`): consistency checks on the GNSS solution.
   The original's gpstrust.cpp.
+- **wifiloc** (`main/wifiloc.c`): a position without sky from the
+  access points heard, matched against where they were heard before.
+  The original's wifiloc.cpp.
 - **tilesrc** (`main/tilesrc.c`): which source a tile comes from -- the
   cache, the card, the network. The original's netsource_get().
 - **tilecache** (`main/tilecache.c`): tiles fetched over the network,
@@ -1063,3 +1066,54 @@ location (0035); between the tags the library changed otherwise only the
 -for-m5tab5 rename in its text, and its own dependencies not at all.
 dependencies.lock is re-resolved by the next build, not here: its diff
 should touch feckless_network_handler's entry and nothing else.
+
+### 0035 -- Wi-Fi location
+
+original/wifiloc.cpp, the last of the original's features: with a good
+fix, every access point heard is folded into a running centroid of
+where the device was; with no sky, a scan is matched against those and
+the heard centroids averaged, weighted by received power. Not a fix:
+centroids of where this device stood, biased onto its roads, with the
+centroids' spread as the accuracy.
+
+**wifiloc.c** is the original's with no radio, file or clock, host-
+tested: the 48-byte record and its table of 16384 (768 KB of PSRAM);
+learning, with a record heard over 400 m after three observations
+judged mobile for good; locating from three or more fixed, thrice-seen
+access points at -88 dBm or better; the CSV rows, verbatim the
+original's, so a card from it carries over; and the timing -- learn
+every 20 s, 40 m on, under 12 km/h, with a fine fix, the scan thrown
+away if the fix moved more than the time allows; locate after 15 s
+without any fix, every 20 s, the estimate good for a minute; write
+every 3 minutes or after 400 changes. All the original's numbers. A row
+with a latitude off the earth, or NaN, is now refused, where the
+original's sscanf took it.
+
+**aimless.c** scans on a task of its own, once a second deciding
+whether to: wifi_scan_list_quiet() blocks about four seconds and waits
+out a join, and the main loop cannot. It reads the table at start and
+writes it there, the original's /wifiloc.csv adopted as
+.aimless.wifiloc.csv (0022, 0023). Off at boot, as the original, with a
+settings row to turn it on; off writes the table and drops the
+estimate. With no fix, a fresh estimate stands in for one as the
+original's `view` did -- coarse, so the map follows it; 2D, so it is
+never fine and nothing that wants a real fix takes it -- and the status
+bar reads "WIFI ESTIMATE ~N m from K access points" on amber.
+
+**trust.c** gets its seventh check, reserved since 0033: an estimate
+under two minutes old from five or more access points, over 3 km plus
+its spread from the fix. As in the original, estimates are made only
+without a fix, so this runs in the minutes after the sky comes back.
+
+Not ported: the original's radio duty cycling, which took its Arduino
+Wi-Fi station down between scans. The radio here is the network side's
+(feckless-network-handler); with no saved network it is not up, and
+nothing is scanned -- the log says so once.
+
+Host: wifiloctest (74 checks), trusttest (44, five more). Device:
+wifiloc.c, trust.c and aimless.c compiled with -c at -Og, -Os and -O2
+for the P4, against feckless-network-handler v0.2.0's wifi.h; not
+built, and not run on the board. On the board, with it on and a saved
+network: "wifiloc: learned N new" every 20 s or so while walking;
+indoors, after 15 s without a fix, "wifiloc: estimate ..." and the
+amber bar.

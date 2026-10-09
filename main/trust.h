@@ -42,15 +42,14 @@ typedef enum {
     TRUST_BAD,                  /* several at once */
 } trust_level_t;
 
-/* src: original/gpstrust.h, the same bits. Wi-Fi's is kept, unset: there
- * is no Wi-Fi positioning to check against yet. */
+/* src: original/gpstrust.h, the same bits. */
 enum {
     TRUST_F_JUMP  = 1 << 0,     /* moved faster than physics allows */
     TRUST_F_SPEED = 1 << 1,     /* Doppler speed disagrees with movement */
     TRUST_F_CLOCK = 1 << 2,     /* GNSS time disagrees with the RTC */
     TRUST_F_SNR   = 1 << 3,     /* signal strengths implausibly even */
     TRUST_F_PPS   = 1 << 4,     /* the pulse is not at 1 Hz */
-    TRUST_F_WIFI  = 1 << 5,     /* reserved */
+    TRUST_F_WIFI  = 1 << 5,     /* a Wi-Fi estimate puts us elsewhere (0035) */
     TRUST_F_ALT   = 1 << 6,     /* altitude impossible or frozen */
 };
 #define TRUST_FLAGS     (7)
@@ -85,6 +84,22 @@ enum {
 #define TRUST_ALT_FREEZE_N      (30)
 #define TRUST_ALT_FREEZE_MOVE_M (20.0)
 #define TRUST_HOLD_MS           (8000u)
+/* src: original/gpstrust.cpp TRUST_WIFI_MAX_M, and its gates: five
+ * access points, two minutes. The one check whose reference a
+ * transmitter does not control, and the strongest, so its threshold is
+ * far outside the centroids' own error -- and that error, the estimate's
+ * spread, is added to it, or a sparse survey would be blamed on GNSS. */
+#define TRUST_WIFI_MAX_M        (3000.0)
+#define TRUST_WIFI_MIN_APS      (5)
+#define TRUST_WIFI_MAX_AGE_MS   (120000u)
+
+/* A Wi-Fi estimate to hold the fix to (0035). */
+typedef struct {
+    double   lat, lon;
+    float    acc_m;
+    int      used;
+    uint32_t age_ms;
+} trust_wifi_t;
 /* src: original/gpstrust.cpp: an RTC reading before 2026-01-01 has never
  * been set -- a flat battery, not an attack. */
 #define TRUST_RTC_MIN_EPOCH     (1767225600LL)
@@ -117,7 +132,7 @@ void trust_reset(trust_t *t);
  * level changed.
  */
 bool trust_update(trust_t *t, const gnss_fix_t *fix, uint32_t now_ms,
-                  int64_t rtc_epoch, uint32_t pps_ms);
+                  int64_t rtc_epoch, uint32_t pps_ms, const trust_wifi_t *wifi);
 
 /* The flags named, ", " between: "jump, clock". Empty with none. */
 void trust_text(const trust_t *t, char *out, size_t cap);

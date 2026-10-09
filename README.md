@@ -93,19 +93,29 @@ What works:
   status bar turns amber and names it; several at once turn it red.
   Nothing is refused: the map draws either way.
 
-Not yet: zoom levels other than 14, Wi-Fi location (and with it the
-checks' Wi-Fi cross-check). The compass is not
-coming: the M135's magnetometer never gave a trustworthy heading where
-it is mounted. See `ARCHITECTURE.md`.
+- Wi-Fi positioning, switched on in settings: with a good fix the
+  device notes which access points it hears where, and with no sky -- a
+  garage, a tunnel approach -- it places itself from the ones it hears,
+  amber and labelled "WIFI ESTIMATE" with a rough spread in metres. Not a
+  fix, and nothing that needs one takes it. It learns only the routes
+  you take, at walking pace or slower, and needs the Wi-Fi radio up -- a
+  saved network. It also lets the consistency checks compare a fix with
+  where the access points say you are.
+
+Not yet: zoom levels other than 14. The compass is not coming: the
+M135's magnetometer never gave a trustworthy heading where it is
+mounted. See `ARCHITECTURE.md`.
 
 What this keeps on the card is hidden, as Defeatist's is: dotted names
 with the FAT hidden attribute set, so they are not the first thing you
 see in the card's root on a computer -- `.aimless.waypoints.dat`,
-`.aimless.lastfix.dat`, `.aimless.aopdb.dat`, and the tile cache in
-`.aimless.tiles/`. None
+`.aimless.lastfix.dat`, `.aimless.aopdb.dat`, `.aimless.wifiloc.csv`,
+and the tile cache in `.aimless.tiles/`. None
 ends in `.bin`, which M5Launcher would list as firmware to install. The
-original's `waypoints.bin`, `lastfix.bin`, `aopdb.bin` and `t/` are renamed to these
+original's `waypoints.bin`, `lastfix.bin`, `aopdb.bin`, `wifiloc.csv` and `t/` are renamed to these
 the first time they are read, so their contents carry over.
+`.aimless.wifiloc.csv` lists the access points heard and where: like
+the rest, a record of where the device has been.
 
 ## On the screen
 
@@ -129,7 +139,8 @@ Along the bottom, five buttons, as the original had them:
   "offline" when the cards' own archives already cover the square. With
   no network it reads "wifi set", and a tap opens Wi-Fi setup.
 - **settings** -- the palette (auto, day, night), the brightness (auto,
-  low, medium, high), labels (on, off) and the Wi-Fi network. Tap a row to change it, and
+  low, medium, high), labels (on, off), Wi-Fi positioning (off, on) and
+  the Wi-Fi network. Tap a row to change it, and
   anywhere outside the panel to close it. The overrides last until the
   next restart.
 - **screen off** -- the backlight goes off; GNSS and tile downloads carry
