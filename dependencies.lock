@@ -311,7 +311,7 @@ dependencies:
       type: git
     version: 390c89466719e0109d7067bbf57231f5381a4166
   feckless_network_handler:
-    component_hash: e56c5f758c010e267b49f10d1f2137a3b23b9fff86cf2b54fd85644781a54e1f
+    component_hash: 6659a7242271d17040b10e77fd7b937827601a6f2b14ad5e6d0731e7b05d03a6
     dependencies:
     - name: idf
       version: '>=5.4.2'
@@ -328,7 +328,7 @@ dependencies:
       git: https://github.com/Sudrien/feckless-network-handler-for-m5tab5.git
       path: .
       type: git
-    version: b625e326653e9f656f7e3a75b7cab06da607c2b4
+    version: 919473373b4a1c598bbee58403602f41d9a48947
   feckless_storage_handler:
     component_hash: 146a764c800770e7d79c2c16a6d38f29334fef302bf4a28a003fdc70a87beb9e
     dependencies:
@@ -351,6 +351,6 @@ direct_dependencies:
 - feckless_network_handler
 - feckless_storage_handler
 - idf
-manifest_hash: 5571171f4423434edd11deb8640402adaa03e5bc59ed395c581a11eebb08c00d
+manifest_hash: 66f5f07e68f251d994b51f8c585f694aa1b5577f4665e8cb0596d7bf3fbe0180
 target: esp32p4
 version: 2.0.0
