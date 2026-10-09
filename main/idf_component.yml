@@ -27,7 +27,7 @@ dependencies:
   # its idf_component.yml says why each is pinned or not.
   feckless_network_handler:
     git: https://github.com/Sudrien/feckless-network-handler-for-m5tab5.git
-    version: "v0.1.0"
+    version: "v0.2.0"
 
   # Class drivers the two libraries require by name and do not fetch (the
   # player vendors fixed copies of both). Mass storage is used here, for

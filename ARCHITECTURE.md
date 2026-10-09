@@ -1053,3 +1053,13 @@ Host: trusttest (39 checks). Device: trust.c and aimless.c compiled with
 -c at -Og, -Os and -O2 for the P4; not built, and not run on the board.
 On the board: "rtc: ..." at boot, "trust: every check passes" at the
 first fix, and a "trust:" warning naming any check that fires.
+
+### 0034 -- feckless-network-handler v0.2.0
+
+The pin in main/idf_component.yml, v0.1.0 to v0.2.0, alone in its patch
+as a manifest change is. v0.2.0 (the library's 0004) gives wifi_seen_t
+each access point's BSSID and adds wifi_scan_list_quiet(), for Wi-Fi
+location (0035); between the tags the library changed otherwise only the
+-for-m5tab5 rename in its text, and its own dependencies not at all.
+dependencies.lock is re-resolved by the next build, not here: its diff
+should touch feckless_network_handler's entry and nothing else.
