@@ -26,19 +26,27 @@ static uint32_t utf8_cut(const char *t, uint32_t len, uint32_t max)
     return n;
 }
 
+uint32_t maplabel_copy(char dst[MAPLABEL_TEXT_MAX], const char *text, uint32_t len)
+{
+    if (!text) return 0;
+    len = utf8_cut(text, len, MAPLABEL_TEXT_MAX - 1);
+    if (len == 0) return 0;
+    memcpy(dst, text, len);
+    dst[len] = '\0';
+    return len;
+}
+
 bool maplabel_add(maplabel_set_t *s, float fx, float fy, uint8_t style,
                   const char *text, uint32_t len)
 {
     if (!s || !text || len == 0 || s->n >= MAPLABEL_PER_TILE) return false;
     if (!(fx >= 0.0f && fx < 1.0f && fy >= 0.0f && fy < 1.0f)) return false;
-    len = utf8_cut(text, len, MAPLABEL_TEXT_MAX - 1);
-    if (len == 0) return false;
-    maplabel_t *m = &s->v[s->n++];
+    maplabel_t *m = &s->v[s->n];
+    if (maplabel_copy(m->text, text, len) == 0) return false;
+    s->n++;
     m->fx = fx;
     m->fy = fy;
     m->style = style;
-    memcpy(m->text, text, len);
-    m->text[len] = '\0';
     return true;
 }
 

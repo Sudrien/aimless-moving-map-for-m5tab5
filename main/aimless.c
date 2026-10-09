@@ -23,8 +23,7 @@
  *                 settings and saved points panels, the setup box over
  *                 the map, saved points and the guide to one, touch
  *
- * What the original did that this does not yet: place names,
- * zoom levels other than z14, the compass, waypoints, Wi-Fi location,
+ * What the original did that this does not yet: zoom levels other than z14, the compass, waypoints, Wi-Fi location,
  * the world map floor, the night palette's automatic switch.
  * ARCHITECTURE.md has the milestones.
  *
@@ -70,6 +69,7 @@
 #include "mapset.h"
 #include "maptile.h"
 #include "mapview.h"
+#include "places.h"
 #include "style.h"
 #include "sun.h"
 #include "netremote.h"
@@ -128,6 +128,9 @@ static const char *TAG = "aimless";
 
 /* src: chosen. How often tiles that failed are tried again. */
 #define REDO_ERRORS_US  (30 * 1000000LL)
+/* How long a place block that would not read waits to be tried again.
+ * src: original/mapengine.cpp ensure_place_blocks(), 20 s. */
+#define PLACES_RETRY_US (20 * 1000000LL)
 
 /* The backlight by daylight (0015). Day is what it always was here; the
  * other two are the original's levels on its 0-255 scale as percent.
@@ -186,6 +189,22 @@ static bool        s_screen_off;
 /* Names on the map (0029). src: original/mapengine.cpp g_labels_on: on
  * until turned off, and not kept across a restart, as the other rows. */
 static bool        s_labels = true;
+
+/*
+ * Place names (0030). Two indexes, the z12 block's localities and
+ * neighbourhoods and the z6 block's regions and countries, each with a
+ * spare the render task fills and swaps in under s_lock, as the
+ * original's g_place_idx and w_place_idx: the status line reads one
+ * while the other is built. The position they are for, published by
+ * the main loop under s_lock. [0] fine, [1] coarse.
+ */
+static places_index_t *s_pidx[2], *s_pidx_w[2];
+static bool        s_pidx_ok[2];
+static tile_id_t   s_pidx_have[2];
+static int64_t     s_pidx_retry[2];
+static bool        s_place_at;
+static double      s_place_wx, s_place_wy;
+static places_t    s_places;
 /* Pan: the view follows an anchor, which is the marker until a pan moves
  * it (original/mapengine.cpp g_anchor_wx). In tiles at VIEW_ZOOM. */
 static bool        s_panning;
@@ -297,11 +316,16 @@ static void draw_status(const gnss_fix_t *fix, int pending)
 {
     /* With a target, where it is goes first: the rest of the line is
      * longer than the screen and is cut at the right (0017). */
-    char nav[64] = "", line[224];
+    /* 0030: where you are in words leads, as the original's: the one
+     * part of the bar worth reading at a glance. */
+    char nav[64] = "";
+    /* Static: with the place, past CLAUDE.md's few hundred bytes of stack. */
+    static char line[384], place[4 * MAPLABEL_TEXT_MAX + 8];
     if (gnss_coarse(fix)) wp_target_text(&s_wp, fix->lat, fix->lon, nav, sizeof(nav));
+    if (!gnss_coarse(fix) || !places_text(&s_places, place, sizeof(place))) place[0] = '\0';
     if (gnss_coarse(fix)) {
-        snprintf(line, sizeof(line), "%s%s%.5f %c  %.5f %c   z%d   %d sats   HDOP %.1f   %.0f km/h   %.6sZ   %s%s",
-                 nav, nav[0] ? "   " : "",
+        snprintf(line, sizeof(line), "%s%s%s%s%.5f %c  %.5f %c   z%d   %d sats   HDOP %.1f   %.0f km/h   %.6sZ   %s%s",
+                 place, place[0] ? "   " : "", nav, nav[0] ? "   " : "",
                  fabs(fix->lat), fix->lat < 0 ? 'S' : 'N',
                  fabs(fix->lon), fix->lon < 0 ? 'W' : 'E',
                  VIEW_ZOOM, fix->sats, fix->hdop, fix->speed_kmh, fix->utc,
@@ -1219,6 +1243,11 @@ static void draw(const gnss_fix_t *fix)
     }
     const int pending = mapview_pending(&s_view);
     const double vx = s_view.fx, vy = s_view.fy;
+    /* Where the device is, not where the view is: a pan does not move
+     * you. Each rank keeps its name with nothing near (places.h). */
+    if (gnss_coarse(fix) && s_mark_ok)
+        places_pick(&s_places, s_pidx_ok[0] ? s_pidx[0] : NULL, s_pidx_ok[1] ? s_pidx[1] : NULL,
+                    VIEW_ZOOM, s_mark_x, s_mark_y);
     xSemaphoreGive(s_lock);
     /* The marker is where the device is, which is the window's centre
      * unless a pan has moved the view; off the screen it is not drawn.
@@ -1303,6 +1332,61 @@ static bool area_step(void)
     return true;
 }
 
+/*
+ * One place block, if one is wanted and not held: original/mapengine.cpp
+ * ensure_place_blocks() and load_place_block(), on the render task when
+ * it has no tile to draw. Nine tiles, each from the cache, the card or
+ * the network, their places layer decoded into the spare index, which
+ * is swapped in if any tile read. One that did not is tried again after
+ * PLACES_RETRY_US. True if a block was read.
+ */
+static bool places_step(void)
+{
+    static const uint8_t ZOOM[2] = { PLACES_FINE_Z, PLACES_COARSE_Z };
+    if (!s_pidx[0]) return false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const bool at = s_place_at;
+    const double wx = s_place_wx, wy = s_place_wy;
+    xSemaphoreGive(s_lock);
+    if (!at) return false;
+    const int64_t now = esp_timer_get_time();
+    for (int i = 0; i < 2; i++) {
+        const tile_id_t c = places_centre(VIEW_ZOOM, wx, wy, ZOOM[i]);
+        if (s_pidx_ok[i] && s_pidx_have[i].x == c.x && s_pidx_have[i].y == c.y) continue;
+        if (now < s_pidx_retry[i]) continue;
+
+        const int64_t t0 = esp_timer_get_time();
+        places_index_t *idx = s_pidx_w[i];
+        places_begin(idx, ZOOM[i]);
+        tile_id_t block[9];
+        const int n = places_block(c, block);
+        int read = 0;
+        for (int k = 0; k < n && !idx->full; k++) {
+            uint32_t len;
+            if (tilesrc_fetch(&s_src, &s_render, block[k], &len, NULL) != TILE_READY) continue;
+            places_sink_t sink = { idx, block[k] };
+            if (maprender_points(&s_render, len, "places", places_part, &sink) == TILE_READY) read++;
+        }
+        if (read) {
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            s_pidx_w[i] = s_pidx[i];
+            s_pidx[i] = idx;
+            s_pidx_have[i] = c;
+            s_pidx_ok[i] = true;
+            xSemaphoreGive(s_lock);
+            s_dirty = true;
+        } else {
+            s_pidx_retry[i] = now + PLACES_RETRY_US;
+        }
+        ESP_LOGI(TAG, "places: z%u/%u/%u block, %d of %d tiles read, %u places%s, in %u ms",
+                 c.z, (unsigned)c.x, (unsigned)c.y, read, n, (unsigned)idx->n,
+                 idx->full ? " (index full)" : "",
+                 (unsigned)((esp_timer_get_time() - t0) / 1000));
+        return true;
+    }
+    return false;
+}
+
 static void render_task(void *arg)
 {
     (void)arg;
@@ -1373,7 +1457,7 @@ static void render_task(void *arg)
         }
 
         if (!took) {
-            if (!area_step()) vTaskDelay(pdMS_TO_TICKS(100));
+            if (!places_step() && !area_step()) vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
 
@@ -2006,6 +2090,18 @@ void app_main(void)
         if (cz_a && cz_b) mapview_set_coarse(&s_view, cz_a, cz_b);
         else ESP_LOGW(TAG, "no overview: out of PSRAM");
     }
+    /* The place indexes, 8 KB each (0030). Without them, no place names. */
+    {
+        bool ok = true;
+        for (int i = 0; i < 2; i++) {
+            ok &= (s_pidx[i] = mem_big(sizeof(places_index_t))) != NULL;
+            ok &= (s_pidx_w[i] = mem_big(sizeof(places_index_t))) != NULL;
+        }
+        if (!ok) {
+            s_pidx[0] = NULL;
+            ESP_LOGW(TAG, "no place names: out of PSRAM");
+        }
+    }
     /* A label set for each tile buffer, 2.5 KB each (0029). Without
      * them the map runs as before, with no names. */
     {
@@ -2054,6 +2150,11 @@ void app_main(void)
             s_mark_x = p.x;
             s_mark_y = p.y;
             s_mark_ok = true;
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            s_place_wx = p.x;
+            s_place_wy = p.y;
+            s_place_at = true;
+            xSemaphoreGive(s_lock);
             /* While panned the view stays where the pan put it; the
              * marker moves on its own (original/README.md). */
             if (!s_panning) {

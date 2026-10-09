@@ -70,8 +70,14 @@ What works:
   from the tiles, drawn over the map with a halo, the bigger places
   first and anything that would overlap left out.
 
-Not yet: the place name in the status line ("Locality, Region"), and
-regions and countries named at this zoom. See `ARCHITECTURE.md`.
+- Where you are, in words, leading the status line: "Neighbourhood,
+  Town, Region, Country", from the nearest named point of each, read
+  from zoom 12 tiles for the first two and zoom 6 for the others. A
+  name is kept between towns rather than flickering; the neighbourhood
+  is dropped once you are a kilometre or so from it.
+
+Not yet: zoom levels other than 14, the compass, Wi-Fi location. See
+`ARCHITECTURE.md`.
 
 What this keeps on the card is hidden, as Defeatist's is: dotted names
 with the FAT hidden attribute set, so they are not the first thing you
@@ -144,7 +150,9 @@ own and set "Where remote tiles come from" and "Pinned build" under
 
 Protomaps basemap extracts, MVT tiles, gzip-compressed: what
 `pmtiles extract` produces from a Protomaps daily build. Zoom 14 must be
-in them; zoom 12 as well gives the soft overview while tiles arrive.
+in them; zoom 12 as well gives the soft overview while tiles arrive and
+the town in the status line, and zoom 6 the region and country. What
+the card lacks comes over the network, when there is one, and is kept.
 
 The card can be **FAT32 or exFAT**. On FAT32 each file is under 4 GB, so
 split a large area into bands with `original/plan-extracts.py`. On exFAT

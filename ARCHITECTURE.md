@@ -32,6 +32,8 @@ does.
 - **maplabel** (`main/maplabel.c`): names collected while a tile is
   drawn, and laid out over the window. The original's label collector
   and the layout half of its draw_labels().
+- **places** (`main/places.c`): the status line's "Locality, Region",
+  from z12 and z6 blocks of place points. The original's place lookup.
 - **tilesrc** (`main/tilesrc.c`): which source a tile comes from -- the
   cache, the card, the network. The original's netsource_get().
 - **tilecache** (`main/tilecache.c`): tiles fetched over the network,
@@ -873,3 +875,53 @@ aimless.c compiled with -c at -Og, -Os and -O2 for the P4 against IDF
 not run on the board. On the board: names over the map once tiles are
 drawn; "labels: off" in the log and none on the screen after the
 settings row.
+
+### 0030 -- place names
+
+Where you are, in words, leading the status line, as the original's
+map_place_text(): "Neighbourhood, Locality, Region, Country".
+
+Not from the grid: a place's point is one centroid, and four z14 tiles
+usually do not hold a township's. So, as the original, from blocks of
+3 x 3 tiles at zooms where a tile is big enough to: z12 (about 7 km a
+tile) for localities and neighbourhoods, z6 (about 460 km) for regions
+and countries -- z6 because it is the original's floor zoom, the one
+its notes found z5 had no archive for.
+
+**places.c** is the original's lookup with no file in it, host-tested:
+the block around a position, the index each keeps (the ranks it is for
+and no others, or a z6 block's thousands of towns would fill it before
+its regions arrived), the nearest point of each rank -- neighbourhoods
+within 0.4 z14 tiles, localities 4, regions and countries any distance
+-- and the text, a rank that repeats an earlier one left out. A rank
+with nothing near keeps its name; the neighbourhood does not. Two small
+departures: a block is read centre first, so a full index loses the
+furthest tiles rather than the north-west ones, and names are cut at a
+UTF-8 character (maplabel_copy(), shared with 0029).
+
+**tilesrc_fetch()** gets a payload without drawing it, in tilesrc_draw()'s
+order: cache, card, network, caching what the network sends. The
+original read place tiles from the card only, because nine failing
+range requests in a row stalled its worker. Here a tile the network has
+not got is cached as a marker and never asked for again, and a block
+that fails waits 20 s (the original's retry), so the network is asked
+too: without it, a card of z14 alone, or no card, has no place names.
+
+**maprender_points()** inflates a payload and decodes one layer, with
+its names, drawing nothing: the original's load_place_tile(). The
+inflate is shared with maprender_payload(), split out unchanged.
+
+**aimless.c**: the main loop publishes the position under the view's
+lock; the render task, when it has no tile to draw and before the area
+cache, reads whichever block is wanted and not held into a spare index
+and swaps it in, as the original's double buffer. draw() picks the
+names under the lock from the marker -- where you are, not where a pan
+has put the view -- and the status line leads with them. 32 KB of PSRAM
+for the four indexes.
+
+Host: placestest (49 checks). Device: places.c, maplabel.c, maptile.c,
+tilesrc.c and aimless.c compiled with -c at -Og, -Os and -O2 for the P4
+against IDF 5.5.1 and the feckless libraries at their pinned tags; not
+built, and not run on the board. On the board: "places: z12/... block,
+N of 9 tiles read, N places" and the same for z6 soon after the first
+fix, and the place leading the status line.

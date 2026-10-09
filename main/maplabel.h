@@ -60,6 +60,10 @@ void maplabel_reset(maplabel_set_t *s);
 bool maplabel_add(maplabel_set_t *s, float fx, float fy, uint8_t style,
                   const char *text, uint32_t len);
 
+/* Copy `len` bytes of a name, not NUL-terminated, into `dst`, cut as
+ * maplabel_add() cuts it. Returns the length kept; 0 copies nothing. */
+uint32_t maplabel_copy(char dst[MAPLABEL_TEXT_MAX], const char *text, uint32_t len);
+
 /* src: original/mapengine.cpp label_rank(): country 0, region 1,
  * locality 2, neighbourhood 3, POI 4. Lower is placed first, so a city
  * wins its pixels over a petrol station. */

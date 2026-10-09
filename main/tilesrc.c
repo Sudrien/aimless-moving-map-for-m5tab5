@@ -125,3 +125,65 @@ tile_state_t tilesrc_store(tilesrc_t *s, maprender_t *r, tile_id_t id,
     if (from) *from = TILESRC_NET;
     return TILE_READY;
 }
+
+tile_state_t tilesrc_fetch(tilesrc_t *s, maprender_t *r, tile_id_t id,
+                           uint32_t *len, tilesrc_from_t *from)
+{
+    *len = 0;
+    if (from) *from = TILESRC_NONE;
+    const uint32_t x = (uint32_t)id.x, y = (uint32_t)id.y;
+
+    bool empty_marked = false;
+    if (s->cache && tilecache_is_open(s->cache)) {
+        uint32_t n = r->tile_cap;
+        if (tilecache_get(s->cache, id.z, x, y, r->tile, &n)) {
+            if (n == 0) {
+                empty_marked = true;
+            } else {
+                s->st.cache_hits++;
+                if (from) *from = TILESRC_CACHE;
+                *len = n;
+                return TILE_READY;
+            }
+        }
+    }
+
+    bool local_failed = false;
+    if (s->local && s->local->n) {
+        uint32_t n = 0;
+        const tile_state_t f = mapset_fetch(s->local, r, id, 0, &n);
+        if (f == TILE_READY) {
+            s->st.local_hits++;
+            if (from) *from = TILESRC_LOCAL;
+            *len = n;
+            return TILE_READY;
+        }
+        if (f == TILE_ERROR) local_failed = true;
+    }
+
+    if (empty_marked) { s->st.misses++; return TILE_NODATA; }
+
+    if (s->remote) {
+        uint32_t n = 0;
+        const tile_state_t f = maprender_fetch(r, s->remote, id, 0, &n);
+        if (f == TILE_NODATA) {
+            if (s->cache) tilecache_put(s->cache, id.z, x, y, NULL, 0);
+            s->st.misses++;
+            if (from) *from = TILESRC_NET;
+            return TILE_NODATA;
+        }
+        if (f == TILE_READY && n >= 2 && r->tile[0] == 0x1F && r->tile[1] == 0x8B) {
+            if (s->cache) tilecache_put(s->cache, id.z, x, y, r->tile, n);
+            s->st.net_hits++;
+            if (from) *from = TILESRC_NET;
+            *len = n;
+            return TILE_READY;
+        }
+        s->st.errors++;
+        return TILE_ERROR;
+    }
+
+    if (local_failed) { s->st.errors++; return TILE_ERROR; }
+    s->st.misses++;
+    return TILE_NODATA;
+}

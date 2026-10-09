@@ -22,6 +22,7 @@
 #include <stdint.h>
 
 #include "maplabel.h"
+#include "mvt.h"
 #include "pmtiles.h"
 #include "raster.h"
 #include "tile_grid.h"
@@ -125,6 +126,17 @@ tile_state_t maprender_fetch(maprender_t *r, maparchive_t *a, tile_id_t id,
                              int split, uint32_t *len);
 tile_state_t maprender_payload(maprender_t *r, uint32_t len, tile_id_t id,
                                uint16_t *px, int split);
+
+/*
+ * The `len` bytes in r->tile inflated and one layer decoded, nothing
+ * drawn: every part of layer `layer` goes to part(ctx, part), with its
+ * "name" resolved. For the place lookup (0030), as the original's
+ * load_place_tile(): every other layer is skipped with a length walk.
+ * TILE_READY if decoded, TILE_NODATA for len 0, TILE_ERROR if the
+ * payload is not gzip MVT or will not inflate.
+ */
+tile_state_t maprender_points(maprender_t *r, uint32_t len, const char *layer,
+                              mvt_part_fn part, void *ctx);
 
 #ifdef __cplusplus
 }

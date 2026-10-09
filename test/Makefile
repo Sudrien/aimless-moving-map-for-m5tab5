@@ -43,6 +43,9 @@
 # maplabeltest: main/maplabel.c, names collected from the fixture and laid
 # out over the window -- rank order, collisions, the map band, UTF-8 cuts.
 #
+# placestest: main/places.c, the status line's place names, and
+# tilesrc_fetch() and maprender_points(), which feed it, on the fixture.
+#
 # -fno-sanitize=shift: raster.c converts to fixed point with
 # `v << RS_FRAC_BITS` on signed values that can be negative (geometry
 # outside the tile). That is undefined in C11 and does the arithmetic
@@ -67,7 +70,7 @@ CORE_SRCS := $(CORE)/src/inflate.c $(CORE)/src/mvt.c $(CORE)/src/pmtiles.c \
 TILE_SRCS := ../main/maptile.c ../main/maplabel.c
 TILE_DEPS := $(TILE_SRCS) ../main/maptile.h ../main/maplabel.h
 
-all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop run-maplabel
+all: run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop run-maplabel run-places
 
 maptiletest: maptiletest.c $(TILE_DEPS) $(CORE_SRCS) fixture.pmtiles
 	$(CC) $(CFLAGS) -o $@ maptiletest.c $(TILE_SRCS) $(CORE_SRCS) $(LDFLAGS)
@@ -160,7 +163,13 @@ maplabeltest: maplabeltest.c ../main/mapview.c ../main/mapview.h ../main/mapset.
 run-maplabel: maplabeltest
 	cd $(CURDIR) && ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./maplabeltest
 
-clean:
-	rm -f maplabeltest areatest lastfixtest maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest suntest uirowtest waypointstest worldtiletest worldtile.bin aoptest
+placestest: placestest.c ../main/places.c ../main/places.h ../main/tilesrc.c ../main/tilesrc.h ../main/tilecache.c ../main/mapset.c $(TILE_DEPS) $(CORE_SRCS) fixture.pmtiles
+	$(CC) $(CFLAGS) -o $@ placestest.c ../main/places.c ../main/tilesrc.c ../main/tilecache.c ../main/mapset.c $(TILE_SRCS) $(CORE_SRCS) $(LDFLAGS)
 
-.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop run-maplabel clean
+run-places: placestest
+	cd $(CURDIR) && ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 ./placestest
+
+clean:
+	rm -f placestest maplabeltest areatest lastfixtest maptiletest nmeatest mapviewtest tilesrctest builddatetest portalwebtest launcherkeytest suntest uirowtest waypointstest worldtiletest worldtile.bin aoptest
+
+.PHONY: all run-maptile run-nmea run-mapview run-tilesrc run-builddate run-portalweb run-launcherkey run-sun run-uirow run-waypoints run-worldtile run-lastfix run-area run-aop run-maplabel run-places clean

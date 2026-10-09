@@ -84,6 +84,26 @@ tile_state_t tilesrc_draw(tilesrc_t *s, maprender_t *r, tile_id_t id,
 tile_state_t tilesrc_store(tilesrc_t *s, maprender_t *r, tile_id_t id,
                            int split, tilesrc_from_t *from);
 
+/*
+ * Tile `id`'s payload into r->tile, *len bytes, from the first source
+ * that has it, in tilesrc_draw()'s order, without drawing it: for the
+ * place lookup (0030), which decodes one layer of it. What the network
+ * sends is cached, after a check that it is gzip, as tilesrc_store()
+ * does. Counted as a draw is.
+ *
+ *   TILE_READY    *len bytes in r->tile; *from says where
+ *   TILE_NODATA   no source has it
+ *   TILE_ERROR    a source that should have had it failed
+ *
+ * The original read place tiles from the card only: nine failing range
+ * requests in a row stalled its worker. Here a tile the network has not
+ * got is cached as a marker and not asked for again, and a failure
+ * waits for the caller's retry, so the network is asked too -- without
+ * it, a card of z14 alone, or no card, would have no place names.
+ */
+tile_state_t tilesrc_fetch(tilesrc_t *s, maprender_t *r, tile_id_t id,
+                           uint32_t *len, tilesrc_from_t *from);
+
 #ifdef __cplusplus
 }
 #endif

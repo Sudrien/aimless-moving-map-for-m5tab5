@@ -224,34 +224,43 @@ tile_state_t maprender_fetch(maprender_t *r, maparchive_t *a, tile_id_t id,
     return TILE_READY;
 }
 
+/* The `got` bytes in r->tile inflated into r->mvt; its length, or 0 if
+ * it is not gzip or will not inflate. */
+static uint32_t inflate_tile(maprender_t *r, uint32_t got)
+{
+    if (got > r->tile_cap) return 0;
+    r->last_bytes = got;
+
+    /* Not gzip means not this tile: a transport problem, in the original's
+     * words, wearing an inflate problem's clothes. */
+    if (got < 18 || r->tile[0] != 0x1F || r->tile[1] != 0x8B) return 0;
+
+    const uint32_t need = gzip_isize(r->tile, got);
+    if (need > r->mvt_cap) {
+        if (need > MVT_CAP_MAX) return 0;
+        const uint32_t want = need + need / 4;      /* headroom for the next one */
+        uint8_t *bigger = get_big(&r->mem, want);
+        if (!bigger) return 0;
+        put(&r->mem, r->mvt);
+        r->mvt = bigger;
+        r->mvt_cap = want;
+    }
+    uint32_t mlen = r->mvt_cap;
+    if (inflate_auto_fast(r->tile, got, r->mvt, &mlen) != INF_OK) return 0;
+    r->last_inflated = mlen;
+    return mlen;
+}
+
 tile_state_t maprender_payload(maprender_t *r, uint32_t got, tile_id_t id,
                                uint16_t *px, int split)
 {
     r->last_bytes = r->last_inflated = 0;
     maplabel_reset(r->labels);
     if (got == 0) return TILE_NODATA;
-    if (got > r->tile_cap) return TILE_ERROR;
-    r->last_bytes = got;
     const uint32_t qx = (uint32_t)id.x & ((1u << split) - 1u);
     const uint32_t qy = (uint32_t)id.y & ((1u << split) - 1u);
-
-    /* Not gzip means not this tile: a transport problem, in the original's
-     * words, wearing an inflate problem's clothes. */
-    if (got < 18 || r->tile[0] != 0x1F || r->tile[1] != 0x8B) return TILE_ERROR;
-
-    const uint32_t need = gzip_isize(r->tile, got);
-    if (need > r->mvt_cap) {
-        if (need > MVT_CAP_MAX) return TILE_ERROR;
-        const uint32_t want = need + need / 4;      /* headroom for the next one */
-        uint8_t *bigger = get_big(&r->mem, want);
-        if (!bigger) return TILE_ERROR;
-        put(&r->mem, r->mvt);
-        r->mvt = bigger;
-        r->mvt_cap = want;
-    }
-    uint32_t mlen = r->mvt_cap;
-    if (inflate_auto_fast(r->tile, got, r->mvt, &mlen) != INF_OK) return TILE_ERROR;
-    r->last_inflated = mlen;
+    const uint32_t mlen = inflate_tile(r, got);
+    if (mlen == 0) return TILE_ERROR;
 
     rs_t rs;
     memset(&rs, 0, sizeof(rs));
@@ -289,6 +298,49 @@ tile_state_t maprender_payload(maprender_t *r, uint32_t got, tile_id_t id,
         mvt_decode(&d, r->mvt, mlen);
         rs_flush(&rs);
     }
+    return TILE_READY;
+}
+
+/* Only the wanted layer is decoded; load_place_tile() in the original. */
+typedef struct {
+    const char  *want;
+    mvt_part_fn  part;
+    void        *ctx;
+} points_t;
+
+static int points_layer(void *ctx, const mvt_layer_t *l)
+{
+    const points_t *p = ctx;
+    return l->name_len == strlen(p->want) && memcmp(l->name, p->want, l->name_len) == 0;
+}
+
+static int points_part(void *ctx, const mvt_part_t *part)
+{
+    const points_t *p = ctx;
+    return p->part(p->ctx, part);
+}
+
+tile_state_t maprender_points(maprender_t *r, uint32_t len, const char *layer,
+                              mvt_part_fn part, void *ctx)
+{
+    r->last_bytes = r->last_inflated = 0;
+    if (len == 0) return TILE_NODATA;
+    const uint32_t mlen = inflate_tile(r, len);
+    if (mlen == 0) return TILE_ERROR;
+
+    points_t p = { .want = layer, .part = part, .ctx = ctx };
+    mvt_decoder_t d;
+    memset(&d, 0, sizeof(d));
+    d.layer_cb = points_layer;
+    d.style_cb = pass_style;
+    d.part_cb  = points_part;
+    d.ctx      = &p;
+    d.pt_buf   = r->pts;  d.pt_cap = PT_CAP;
+    d.val_style = r->val; d.val_cap = VAL_CAP;
+    d.val_name  = r->val_name;
+    d.val_name_len = r->val_name_len;
+    d.name_key = "name";
+    mvt_decode(&d, r->mvt, mlen);
     return TILE_READY;
 }
 
