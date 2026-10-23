@@ -1117,3 +1117,37 @@ built, and not run on the board. On the board, with it on and a saved
 network: "wifiloc: learned N new" every 20 s or so while walking;
 indoors, after 15 s without a fix, "wifiloc: estimate ..." and the
 amber bar.
+
+### 0036 -- CI: build, attest and release
+
+There was no workflow, so no release, and nothing for the web flasher
+(another-webflasher-for-m5tab5) to offer. `.github/workflows/main.yml`
+is lothesome-audio-analyzer-for-m5tab5's, with three changes:
+
+- **ESP-IDF 5.5.5 by default**, not 6.1: the committed dependencies.lock
+  was resolved under 5.5.5, and there is no IDF 6 lock here. 6.1 is a
+  choice on a manual run; its lock is uploaded to be read.
+- **Build provenance** from the start (defeatist's 8005): both binaries
+  attested by SHA-256, checked with `gh attestation verify <file> --repo
+  Sudrien/aimless-moving-map-for-m5tab5`. The files are unchanged.
+- **The two build-time fetches are checked.** The world tile (0020) and
+  the BMI270 image (0032) come over the network at the first configure,
+  and either failing leaves an empty file and a build that succeeds. The
+  step warns on an empty one, so a release that boots to black or has no
+  accelerometer says so in its run.
+
+Like the others: a tag builds, attests and releases; a manual run builds
+any ref and releases only when asked, and only from a tag that exists
+(unprofitable-mahjong's check). Host tests run first, before the IDF
+install -- `make -C test` needs only a C compiler and python3, and passes
+on a bare checkout. The files are
+`aimless_<tag>_moving_map_for_m5tab5_standalone.bin` (merged, at 0x0) and
+`aimless_<tag>_moving_map_for_m5tab5.bin` (the app, for M5Launcher).
+
+**The world tile is in the released image.** It is OpenStreetMap-derived,
+under the ODbL, and the newest Protomaps daily build unless
+`CONFIG_AIMLESS_PINNED_BUILD` names one, so two runs of one tag can embed
+different tiles. A published binary distributes it; the README's
+licence section speaks of map data on the card, not in the firmware.
+
+Not yet run on CI.

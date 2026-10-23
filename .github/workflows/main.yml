@@ -1,0 +1,156 @@
+name: Build and Artifact the ESP-IDF Project
+
+# lothesome-audio-analyzer-for-m5tab5's main.yml, with build provenance
+# (defeatist's 8005) from the start. A tag builds, attests and releases;
+# a manual run builds any ref, with a choice of ESP-IDF, and releases
+# only when asked.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: 'Git tag, branch, or commit to build (e.g. v0.1.0)'
+        required: true
+        default: 'main'
+        type: string
+      # The committed dependencies.lock was resolved under 5.5.5, so that
+      # is the default. 6.1 is offered because main/CMakeLists.txt has
+      # the 6.x cJSON path, but this repository has no IDF 6 lock: a 6.1
+      # run resolves its own.
+      idf_version:
+        description: 'ESP-IDF to build with'
+        required: false
+        default: 'v5.5.5'
+        type: choice
+        options:
+          - v5.5.5
+          - v6.1
+      release:
+        description: 'Also publish a GitHub release with these binaries'
+        required: false
+        default: false
+        type: boolean
+
+# contents: write creates the release. id-token and attestations sign
+# and store the build provenance.
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.git_ref || github.ref }}
+
+      # A manual run with "release" ticked must name a tag that exists;
+      # otherwise action-gh-release makes one on the default branch's
+      # newest commit, not on what was built (unprofitable-mahjong's
+      # check). Before the IDF install, so a mistake costs seconds.
+      - name: Check that a release is of a tag
+        if: github.event_name == 'workflow_dispatch' && inputs.release
+        env:
+          GIT_REF: ${{ github.event.inputs.git_ref }}
+        run: |
+          if ! git ls-remote --exit-code --tags origin "refs/tags/$GIT_REF" > /dev/null; then
+            echo "::error::'$GIT_REF' is not a tag; a release can only be made from a tag"
+            exit 1
+          fi
+
+      # github.ref_name is the branch on a workflow_dispatch, not what
+      # was checked out; the input names the build when there is one.
+      # Through the environment, never pasted into the script, and a /
+      # becomes - so it can be a file name.
+      - name: Work out the version string
+        id: ver
+        env:
+          REF_NAME: ${{ github.event.inputs.git_ref || github.ref_name }}
+        run: |
+          echo "ref=$REF_NAME" >> "$GITHUB_OUTPUT"
+          echo "name=${REF_NAME//\//-}" >> "$GITHUB_OUTPUT"
+
+      # Before the firmware build: the host tests need only a C compiler
+      # and python3 (README), so a regression fails here in seconds.
+      - name: Host tests
+        run: make -C test
+
+      - name: Install ESP-IDF
+        uses: espressif/install-esp-idf-action@v1
+        with:
+          version: ${{ github.event.inputs.idf_version || 'v5.5.5' }}
+          target: 'esp32p4'
+
+      # The first configure also fetches the world tile (0020) and the
+      # BMI270 image (0032) into build/. Either one failing gives an
+      # empty file and a build that still succeeds, so the step checks
+      # both and warns rather than release a map that boots to black or
+      # has no accelerometer without saying so.
+      - name: Build and Merge Binaries
+        env:
+          NAME: ${{ steps.ver.outputs.name }}
+        run: |
+          idf.py set-target esp32p4
+          # the release string into esp_app_desc_t.version
+          echo "$NAME" > version.txt
+          idf.py build
+          for f in build/world_z0.mvt.gz build/bmi270_config.bin; do
+            if [ ! -s "$f" ]; then echo "::warning::$f is empty: the fetch failed, and the firmware is built without it"; fi
+          done
+          idf.py merge-bin
+          mv build/merged-binary.bin "build/aimless_${NAME}_moving_map_for_m5tab5_standalone.bin"
+          mv build/aimless_moving_map_for_m5tab5.bin "build/aimless_${NAME}_moving_map_for_m5tab5.bin"
+
+      # A signed record that these two files, by their SHA-256, were
+      # built by this workflow from this commit. Stored with the
+      # repository, not in the files, which flash as before. Every run
+      # attests, so a downloaded artifact can be checked too:
+      #   gh attestation verify <file> --repo Sudrien/aimless-moving-map-for-m5tab5
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            build/aimless_${{ steps.ver.outputs.name }}_moving_map_for_m5tab5_standalone.bin
+            build/aimless_${{ steps.ver.outputs.name }}_moving_map_for_m5tab5.bin
+
+      - name: Archive build output artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: aimless_moving_map_for_m5tab5-${{ steps.ver.outputs.name }}
+          path: |
+            build/aimless_${{ steps.ver.outputs.name }}_moving_map_for_m5tab5_standalone.bin
+            build/aimless_${{ steps.ver.outputs.name }}_moving_map_for_m5tab5.bin
+
+      # The lock the component manager resolved, to be read and
+      # committed if it differs; on a 6.1 run, the only IDF 6 lock there
+      # is.
+      - name: Archive the dependency lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependencies.lock-${{ steps.ver.outputs.name }}-idf${{ github.event.inputs.idf_version || 'v5.5.5' }}
+          path: dependencies.lock
+          if-no-files-found: ignore
+
+      # Asked by event, not by github.ref: a manual run started from a
+      # tag in the Actions menu has a tag for github.ref whatever it
+      # builds. tag_name is the ref as given, so the release lands on
+      # the tag that was built.
+      - name: Publish release
+        if: github.event_name == 'push' || inputs.release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.ref }}
+          name: ${{ steps.ver.outputs.ref }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            build/aimless_${{ steps.ver.outputs.name }}_moving_map_for_m5tab5_standalone.bin
+            build/aimless_${{ steps.ver.outputs.name }}_moving_map_for_m5tab5.bin
