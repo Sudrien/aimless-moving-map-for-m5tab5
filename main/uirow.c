@@ -83,6 +83,36 @@ int ui_panel_at(int px, int py, int sw, int sh)
     return row < UI_SET_COUNT ? row : UI_PANEL_NOTHING;
 }
 
+void ui_about_rect(int sw, int sh, ui_rect_t *r)
+{
+    r->w = sw * 3 / 4;
+    r->h = sh - 40;
+    r->x = (sw - r->w) / 2;
+    r->y = (sh - r->h) / 2;
+}
+
+int ui_about_rows(int sw, int sh, int line_h)
+{
+    ui_rect_t r;
+    ui_about_rect(sw, sh, &r);
+    const int rows = line_h > 0 ? (r.h - UI_SP_HEAD_H - UI_SP_FOOT_H) / line_h : 0;
+    return rows < 1 ? 1 : rows;
+}
+
+ui_about_hit_t ui_about_at(int px, int py, int sw, int sh)
+{
+    ui_rect_t r;
+    ui_about_rect(sw, sh, &r);
+    if (px < r.x || px >= r.x + r.w || py < r.y || py >= r.y + r.h) return UI_ABOUT_OUTSIDE;
+    if (py > r.y + r.h - UI_SP_FOOT_H) {
+        if (px < r.x + UI_SP_CLOSE_W) return UI_ABOUT_CLOSE;
+        /* src: ui_pins_at()'s up and down, the original's pinPanelTouch(). */
+        if (px > r.x + r.w - 154 && px < r.x + r.w - 86) return UI_ABOUT_UP;
+        if (px > r.x + r.w - 86) return UI_ABOUT_DOWN;
+    }
+    return UI_ABOUT_NOTHING;
+}
+
 void ui_pins_rect(int sw, int sh, ui_rect_t *r)
 {
     r->w = sw * 2 / 3;

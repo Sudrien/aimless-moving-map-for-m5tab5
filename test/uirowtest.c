@@ -125,6 +125,28 @@ int main(void)
         }
     }
 
+    printf("the licences page (0037)\n");
+    {
+        ui_rect_t p;
+        ui_about_rect(SW, SH, &p);
+        CHECK(p.w == SW * 3 / 4 && p.h == SH - 40 && p.x == (SW - p.w) / 2 && p.y == 20, "rect");
+        /* 34: TEXT_SCALE 2's 24 px glyphs and a 10 px gap, SETUP_LINE */
+        CHECK(ui_about_rows(SW, SH, 34) == (SH - 40 - 70 - 62) / 34, "rows %d", ui_about_rows(SW, SH, 34));
+        CHECK(ui_about_rows(SW, 100, 34) == 1, "at least one row");
+        CHECK(ui_about_rows(SW, SH, 0) == 1, "no line height");
+        CHECK(ui_about_at(p.x - 1, SH / 2, SW, SH) == UI_ABOUT_OUTSIDE, "left of it");
+        CHECK(ui_about_at(SW / 2, p.y + p.h, SW, SH) == UI_ABOUT_OUTSIDE, "under it");
+        CHECK(ui_about_at(p.x + 20, p.y + p.h - 20, SW, SH) == UI_ABOUT_CLOSE, "close");
+        CHECK(ui_about_at(p.x + p.w - 120, p.y + p.h - 20, SW, SH) == UI_ABOUT_UP, "up");
+        CHECK(ui_about_at(p.x + p.w - 40, p.y + p.h - 20, SW, SH) == UI_ABOUT_DOWN, "down");
+        CHECK(ui_about_at(p.x + p.w / 2, p.y + p.h - 20, SW, SH) == UI_ABOUT_NOTHING, "footer gap");
+        CHECK(ui_about_at(p.x + p.w / 2, SH / 2, SW, SH) == UI_ABOUT_NOTHING, "a line");
+        /* the settings row that opens it fits in the panel */
+        ui_rect_t sp;
+        ui_panel_rect(SW, SH, &sp);
+        CHECK(ui_panel_at(sp.x + sp.w / 2, sp.y + 70 + UI_SET_ABOUT * 62 + 30, SW, SH) == UI_SET_ABOUT, "its row");
+    }
+
     printf("the overrides cycle back to automatic\n");
     {
         ui_theme_t t = UI_THEME_AUTO;

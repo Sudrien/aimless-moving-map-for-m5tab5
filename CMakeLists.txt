@@ -11,3 +11,10 @@ include(${CMAKE_CURRENT_LIST_DIR}/cmake/exfat.cmake)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(aimless_moving_map_for_m5tab5)
+
+# libversions.h, the licences page's list (0037): generated from the lock,
+# the BMI270 pin and the world tile's source when the build is
+# configured -- after project(), which is when main does those fetches.
+idf_component_get_property(main_lib main COMPONENT_LIB)
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/libversions.cmake)
+target_include_directories(${main_lib} PRIVATE "${LIBVERSIONS_DIR}")

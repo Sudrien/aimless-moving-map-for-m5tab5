@@ -68,8 +68,9 @@ bool ui_wake_zone(int px, int py, int sw, int sh);
 
 /* The original's rows, less the compass's two, which are not coming.
  * Labels (0029) after brightness and Wi-Fi location (0035) before the
- * Wi-Fi network, where the original had them. */
-enum { UI_SET_THEME = 0, UI_SET_BRIGHT, UI_SET_LABELS, UI_SET_WIFILOC, UI_SET_WIFI, UI_SET_COUNT };
+ * Wi-Fi network, where the original had them. Licences (0037) last: it
+ * is not a setting, and is the one row nobody reaches for while moving. */
+enum { UI_SET_THEME = 0, UI_SET_BRIGHT, UI_SET_LABELS, UI_SET_WIFILOC, UI_SET_WIFI, UI_SET_ABOUT, UI_SET_COUNT };
 
 /* src: original/tab5_map.cpp SP_ROW_H, SP_HEAD_H, SP_FOOT_H. */
 #define UI_SP_ROW_H     (62)
@@ -131,6 +132,30 @@ typedef enum {
  * adds its scroll offset and checks the row has a point in it.
  */
 ui_pins_hit_t ui_pins_at(int px, int py, int sw, int sh, int *row);
+
+/* ---- the licences page (0037) ---- */
+
+/* The settings panel's width and the screen's height less 40, as
+ * ui_panel_rect() would be with every row it could hold: the longest
+ * line, the world map's attribution, needs the width. The heading and
+ * footer are the settings panel's, so close is where it is there. */
+void ui_about_rect(int sw, int sh, ui_rect_t *r);
+
+/* Lines on one page, at line_h pixels a line (the caller's text height
+ * and gap: uirow has no font). */
+int  ui_about_rows(int sw, int sh, int line_h);
+
+typedef enum {
+    UI_ABOUT_NOTHING = 0,
+    UI_ABOUT_OUTSIDE,   /* closes it */
+    UI_ABOUT_CLOSE,
+    UI_ABOUT_UP,
+    UI_ABOUT_DOWN,
+} ui_about_hit_t;
+
+/* What a tap on the page hits. Up and down are the saved points panel's
+ * two footer buttons, at the same offsets from the right. */
+ui_about_hit_t ui_about_at(int px, int py, int sw, int sh);
 
 typedef enum { UI_THEME_AUTO = 0, UI_THEME_DAY, UI_THEME_NIGHT, UI_THEME_COUNT } ui_theme_t;
 typedef enum { UI_BRIGHT_AUTO = 0, UI_BRIGHT_LOW, UI_BRIGHT_MED, UI_BRIGHT_HIGH, UI_BRIGHT_COUNT } ui_bright_t;

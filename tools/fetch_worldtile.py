@@ -18,6 +18,10 @@ it gets nothing at all -- an empty file -- and this exits 0: the
 firmware then simply has no backdrop, which is what a build with no
 network should produce, not a failed build.
 
+OUT.source gets the name of the archive the tile came from, without
+".pmtiles" -- a daily build's is its date, 20261020 -- for the licences
+page (0037, cmake/libversions.cmake). Empty when there is no tile.
+
 Why at build time and not committed: the tile is OpenStreetMap-derived
 data under the ODbL, and CLAUDE.md keeps that out of the repository. It
 lands in the build directory and the firmware image.
@@ -205,6 +209,13 @@ def main():
     with open(tmp, "wb") as f:
         f.write(data)
     os.replace(tmp, a.out)
+    # 0037: which archive, for the licences page; empty with no tile.
+    name = os.path.basename(said) if data else ""
+    if name.endswith(".pmtiles"):
+        name = name[:-len(".pmtiles")]
+    with open(tmp, "w") as f:
+        f.write(name + "\n" if name else "")
+    os.replace(tmp, a.out + ".source")
     if data:
         print("worldtile: %d/%d/%d, %d bytes, from %s" % (z, x, y, len(data), said))
     else:

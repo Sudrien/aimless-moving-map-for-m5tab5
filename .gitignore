@@ -16,6 +16,7 @@ test/waypointstest
 components/fatfs/
 test/worldtiletest
 test/worldtile.bin
+test/worldtile.bin.source
 test/lastfixtest
 test/areatest
 test/aoptest

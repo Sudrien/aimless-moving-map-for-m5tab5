@@ -139,8 +139,10 @@ Along the bottom, five buttons, as the original had them:
   "offline" when the cards' own archives already cover the square. With
   no network it reads "wifi set", and a tap opens Wi-Fi setup.
 - **settings** -- the palette (auto, day, night), the brightness (auto,
-  low, medium, high), labels (on, off), Wi-Fi positioning (off, on) and
-  the Wi-Fi network. Tap a row to change it, and
+  low, medium, high), labels (on, off), Wi-Fi positioning (off, on), the
+  Wi-Fi network, and licences: every library and data set in the
+  firmware, its version and its licence, with the date of the world
+  map's extract. Tap a row to change it, and
   anywhere outside the panel to close it. The overrides last until the
   next restart.
 - **screen off** -- the backlight goes off; GNSS and tile downloads carry
@@ -224,5 +226,8 @@ NMEA parser. Only a C compiler is needed;
 
 MIT. See `LICENSE`. The firmware embeds Bosch Sensortec's BMI270
 configuration image, fetched at build time, under BSD-3-Clause: see
-`LICENSE-BMI270`. Map data on your card is the map provider's, under
+`LICENSE-BMI270`. It also embeds the world map shown at boot, one tile
+of a Protomaps build fetched at build time: © OpenStreetMap
+contributors, under the ODbL. Settings → licences names the build it
+was extracted from. Map data on your card is the map provider's, under
 its own licence (for Protomaps builds, OpenStreetMap's ODbL).

@@ -84,6 +84,7 @@
 #include "uirow.h"
 #include "waypoints.h"
 #include "worldtile.h"
+#include "libversions.h"     /* generated: cmake/libversions.cmake (0037) */
 #include "lastfix.h"
 #include "area.h"
 #include "aop.h"
@@ -264,6 +265,10 @@ static int64_t     s_area_armed_until;
 static wp_list_t   s_wp;
 static bool        s_pins;          /* the panel is open */
 static int         s_pins_scroll;
+
+/* The licences page (0037): open, and its first line on screen. */
+static bool        s_about;
+static int         s_about_scroll;
 
 /*
  * Wi-Fi setup, as this loop moves through it. Read by the network's
@@ -1076,6 +1081,14 @@ static void row_text(int i, char *name, char *value, char *note, uint16_t *chip)
         }
         break;
     }
+    case UI_SET_ABOUT: {
+        const esp_app_desc_t *d = esp_app_get_description();
+        snprintf(name, 40, "licences");
+        snprintf(value, 40, "show");
+        snprintf(note, 80, "%.31s - libraries and the world map", d ? d->version : "?");
+        *chip = COL_BTN;
+        break;
+    }
     default:
         name[0] = value[0] = note[0] = '\0';
         *chip = COL_BTN;
@@ -1165,6 +1178,90 @@ static void draw_pins_panel(const gnss_fix_t *fix)
         text_centred(p.x + p.w - 122, p.y + p.h - 34, "up", 60, COL_STATUS_FG);
         box(p.x + p.w - 80, p.y + p.h - 56, 64, 44, COL_BTN, COL_BTN_EDGE);
         text_centred(p.x + p.w - 48, p.y + p.h - 34, "down", 60, COL_STATUS_FG);
+    }
+}
+
+/* ---- the licences page (0037) ---- */
+
+/* src: SETUP_LINE, TEXT_SCALE's glyphs and a 10 px gap. */
+#define ABOUT_LINE      SETUP_LINE
+
+/*
+ * What this firmware is made of, as libversions.h has it: the module,
+ * the checkout it was built from, and its licence, in three columns. The
+ * columns are as wide as their longest entry, measured once; a line that
+ * still does not fit is cut at the panel's edge by gfx_draw_text().
+ * Paged with up and down, as the saved points are.
+ */
+static void draw_about(void)
+{
+    if (!s_about) return;
+    ui_rect_t p;
+    ui_about_rect(gfx_w(), gfx_h(), &p);
+    const int rows = ui_about_rows(gfx_w(), gfx_h(), ABOUT_LINE);
+    static int cw[3];
+    if (!cw[0]) {
+        for (int i = 0; i < LIBVERSIONS_COUNT; i++)
+            for (int c = 0; c < 3; c++) {
+                const int w = gfx_text_w(k_libversions[i][c], TEXT_SCALE);
+                if (w > cw[c]) cw[c] = w;
+            }
+    }
+    /* src: draw_panel()'s 30 px text inset and its 24 px right margin. */
+    const int left = p.x + 30, right = p.x + p.w - 24, gap = 24;
+    int x2 = right - cw[2], x1 = x2 - gap - cw[1];
+    if (x1 < left + 200) {          /* a long name keeps at least 200 px */
+        x1 = left + 200;
+        x2 = x1 + cw[1] + gap;
+    }
+
+    box(p.x, p.y, p.w, p.h, COL_PANEL_BG, COL_BTN_EDGE);
+    gfx_draw_text(p.x + 18, p.y + 18, "licences", TEXT_SCALE, 200, COL_STATUS_FG);
+    gfx_draw_text(p.x + 150, p.y + 20, "github.com/Sudrien/aimless-moving-map-for-m5tab5",
+                  TEXT_SCALE, p.w - 170, COL_DIM);
+    for (int r = 0; r < rows; r++) {
+        const int i = s_about_scroll + r;
+        if (i >= LIBVERSIONS_COUNT) break;
+        const int y = p.y + UI_SP_HEAD_H + r * ABOUT_LINE;
+        gfx_draw_text(left, y, k_libversions[i][0], TEXT_SCALE, x1 - gap - left, COL_STATUS_FG);
+        gfx_draw_text(x1, y, k_libversions[i][1], TEXT_SCALE, x2 - gap - x1, COL_NOTE);
+        gfx_draw_text(x2, y, k_libversions[i][2], TEXT_SCALE, right - x2, COL_NOTE);
+    }
+
+    box(p.x + 14, p.y + p.h - 56, 150, 44, COL_BTN, COL_BTN_EDGE);
+    text_centred(p.x + 89, p.y + p.h - 34, "close", 140, COL_STATUS_FG);
+    if (LIBVERSIONS_COUNT > rows) {
+        /* three ints and " of ": 36 at the most, as -Wformat-truncation counts */
+        static char page[40];
+        snprintf(page, sizeof(page), "%d-%d of %d", s_about_scroll + 1,
+                 s_about_scroll + rows < LIBVERSIONS_COUNT ? s_about_scroll + rows : LIBVERSIONS_COUNT,
+                 LIBVERSIONS_COUNT);
+        text_centred(p.x + p.w / 2, p.y + p.h - 34, page, 240, COL_DIM);
+        box(p.x + p.w - 154, p.y + p.h - 56, 64, 44, COL_BTN, COL_BTN_EDGE);
+        text_centred(p.x + p.w - 122, p.y + p.h - 34, "up", 60, COL_STATUS_FG);
+        box(p.x + p.w - 80, p.y + p.h - 56, 64, 44, COL_BTN, COL_BTN_EDGE);
+        text_centred(p.x + p.w - 48, p.y + p.h - 34, "down", 60, COL_STATUS_FG);
+    }
+}
+
+/* A tap on the licences page: close, or a page up or down. */
+static void about_tap(int x, int y)
+{
+    const int rows = ui_about_rows(gfx_w(), gfx_h(), ABOUT_LINE);
+    switch (ui_about_at(x, y, gfx_w(), gfx_h())) {
+    case UI_ABOUT_OUTSIDE:
+    case UI_ABOUT_CLOSE:
+        s_about = false;
+        break;
+    case UI_ABOUT_UP:
+        s_about_scroll -= rows;
+        if (s_about_scroll < 0) s_about_scroll = 0;
+        break;
+    case UI_ABOUT_DOWN:
+        if (s_about_scroll + rows < LIBVERSIONS_COUNT) s_about_scroll += rows;
+        break;
+    default:
+        break;
     }
 }
 
@@ -1361,6 +1458,7 @@ static void draw(const gnss_fix_t *fix)
     draw_setup();
     draw_panel();
     draw_pins_panel(fix);
+    draw_about();
     gfx_blit(0, gfx_h());
 }
 
@@ -1894,6 +1992,7 @@ static void screen_off(void)
     pan_reset();
     s_panel = false;
     s_pins = false;
+    s_about = false;
     s_screen_off = true;
     backlight(0);
     gfx_fill_rect(0, 0, W, H, RGB(0, 0, 0));
@@ -1946,6 +2045,13 @@ static void row_tap(int row)
             ESP_LOGI(TAG, "setup: asked for from settings");
             setup_want(true);
         }
+        break;
+    case UI_SET_ABOUT:
+        /* The page in the panel's place, from its first line. */
+        s_panel = false;
+        s_about = true;
+        s_about_scroll = 0;
+        ESP_LOGI(TAG, "licences: %d entries", LIBVERSIONS_COUNT);
         break;
     default:
         break;
@@ -2042,6 +2148,11 @@ static void ui_touch(const gnss_fix_t *fix)
     s_dirty = true;
     if (s_pins) {
         pins_tap(x, y, fix);
+        touch_swallow();
+        return;
+    }
+    if (s_about) {
+        about_tap(x, y);
         touch_swallow();
         return;
     }

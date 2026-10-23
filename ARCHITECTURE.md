@@ -1151,3 +1151,56 @@ different tiles. A published binary distributes it; the README's
 licence section speaks of map data on the card, not in the firmware.
 
 Not yet run on CI.
+
+### 0037 -- the licences page, with the world map's extract date
+
+Asked for: a page of what the firmware is made from, as defeatist's
+BUILD tab has (5283, 5284), and the date of the world map's extract.
+
+**The list is generated, not written.** `cmake/libversions.cmake` is
+unprofitable-mahjong's copy of defeatist's, run after `project()` and
+writing `libversions.h` into the build directory: this repository at
+its commit; every component in the lock the build used, at its resolved
+version (git ones by commit), with the licence read from the copy in
+managed_components/; ESP-IDF; cJSON on 5.x, where it is IDF's json and
+not in the lock; the Ark Pixel font through feckless-graphics-handler.
+Then this firmware's two fetched files:
+
+- **The BMI270 image** (0032) by the commit `fetch_bmi270_config.py`
+  pins, BSD-3-Clause -- or "not fetched" when the build got an empty
+  file, which means nothing of Bosch's is in it.
+- **The world tile** (0020) by the build it came from, ODbL-1.0, named
+  "World map, (c) OpenStreetMap contributors (Protomaps)", the
+  attribution the ODbL asks for. `fetch_worldtile.py` now writes
+  `world_z0.mvt.gz.source` beside the tile: the archive's name less
+  `.pmtiles`, which for a daily build is its date and is shown as one
+  (20261020 as 2026-10-20). A pinned build shows its name as written.
+  Empty with no tile, and the line reads "not fetched"; a tile fetched
+  before this, with no `.source`, reads "unknown build" until a
+  fullclean fetches again.
+
+A last line says that the map tiles on the card or fetched at run time
+are not in the firmware and are under their provider's terms, so the
+world map's line is not read as covering them.
+
+**The page.** A sixth settings row, "licences", last: not a setting.
+Its note is the version from esp_app_desc_t. A tap closes the settings
+and opens the page in their place: the settings panel's width (the
+attribution is the longest line), the screen's height less 40, the
+repository's address in the heading, three measured columns, 16 lines a
+page at SETUP_LINE (34 px), paged by up and down at the saved points
+panel's offsets, "N-M of K" between them. Close, or a tap outside,
+returns to the map; screen off closes it. The geometry is uirow.c's
+(`ui_about_rect`, `ui_about_rows`, `ui_about_at`), host-tested in
+uirowtest.
+
+The generator was run with `cmake -P` on the committed lock, and again
+with test/fixture.pmtiles copied as `20261020.pmtiles` and fetched, and
+an 8 KB BMI270 file: 25 entries, the world map's at 2026-10-20 and the
+BMI270's at 41129fc. Without managed_components/ the components read
+"licence not found", as in defeatist's test; a real build reads their
+copies. draw_about() and about_tap() were compiled on the host with
+-Wall -Wextra -Werror against uirow.c, the generated header and stubs
+for gfx -- which caught a `-Wformat-truncation` that would have failed
+the IDF build. aimless.c as a whole was not compiled, and none of it
+has been on the board.
